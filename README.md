@@ -170,4 +170,4 @@ GitHub: [@mohduzr02](https://github.com/mohduzr02)
 
 ## License
 
-Add a license of your choice (e.g. MIT) and update this section.
+MIT License.
