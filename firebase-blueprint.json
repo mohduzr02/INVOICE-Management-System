@@ -1,0 +1,327 @@
+{
+  "entities": {
+    "Business": {
+      "title": "Business",
+      "description": "GST registered business profile and settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Business ID" },
+        "ownerUid": { "type": "string", "description": "UID of owner" },
+        "name": { "type": "string", "maxLength": 150 },
+        "tradeName": { "type": "string", "maxLength": 150 },
+        "gstin": { "type": "string", "maxLength": 15 },
+        "pan": { "type": "string", "maxLength": 10 },
+        "state": { "type": "string", "maxLength": 50 },
+        "stateCode": { "type": "string", "maxLength": 2 },
+        "email": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 15 },
+        "address": { "type": "string", "maxLength": 300 },
+        "pincode": { "type": "string", "maxLength": 6 },
+        "bankName": { "type": "string", "maxLength": 100 },
+        "accountNumber": { "type": "string", "maxLength": 35 },
+        "ifsc": { "type": "string", "maxLength": 11 },
+        "branch": { "type": "string", "maxLength": 100 },
+        "upiId": { "type": "string", "maxLength": 50 },
+        "invoicePrefix": { "type": "string", "maxLength": 10 },
+        "nextInvoiceNumber": { "type": "number" },
+        "termsAndConditions": { "type": "string", "maxLength": 2000 },
+        "compositionScheme": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "ownerUid", "name", "state", "stateCode"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Buyer or client record with GSTIN",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "name": { "type": "string", "maxLength": 150 },
+        "gstin": { "type": "string", "maxLength": 15 },
+        "phone": { "type": "string", "maxLength": 15 },
+        "email": { "type": "string", "maxLength": 100 },
+        "billingAddress": { "type": "string", "maxLength": 300 },
+        "shippingAddress": { "type": "string", "maxLength": 300 },
+        "state": { "type": "string", "maxLength": 50 },
+        "stateCode": { "type": "string", "maxLength": 2 },
+        "pan": { "type": "string", "maxLength": 10 },
+        "isComposition": { "type": "boolean" },
+        "currentBalance": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "name", "state", "stateCode"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "Vendor or supplier record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "name": { "type": "string", "maxLength": 150 },
+        "gstin": { "type": "string", "maxLength": 15 },
+        "phone": { "type": "string", "maxLength": 15 },
+        "email": { "type": "string", "maxLength": 100 },
+        "address": { "type": "string", "maxLength": 300 },
+        "state": { "type": "string", "maxLength": 50 },
+        "stateCode": { "type": "string", "maxLength": 2 },
+        "pan": { "type": "string", "maxLength": 10 },
+        "currentBalance": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "name", "state", "stateCode"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Product or service item with HSN/SAC and GST rate",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "name": { "type": "string", "maxLength": 150 },
+        "description": { "type": "string", "maxLength": 500 },
+        "hsnSac": { "type": "string", "maxLength": 8 },
+        "type": { "type": "string", "enum": ["goods", "services"] },
+        "unit": { "type": "string", "maxLength": 10 },
+        "purchasePrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "taxRate": { "type": "number" },
+        "isTaxInclusive": { "type": "boolean" },
+        "cessRate": { "type": "number" },
+        "openingStock": { "type": "number" },
+        "currentStock": { "type": "number" },
+        "minStockAlert": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "name", "hsnSac", "taxRate", "sellingPrice"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "GST Tax Invoice or Bill of Supply",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "invoiceNumber": { "type": "string", "maxLength": 30 },
+        "invoiceType": { "type": "string", "enum": ["TAX_INVOICE", "BILL_OF_SUPPLY", "EXPORT_INVOICE"] },
+        "status": { "type": "string", "enum": ["DRAFT", "FINALIZED", "CANCELLED", "PAID", "PARTIALLY_PAID"] },
+        "date": { "type": "string", "maxLength": 10 },
+        "dueDate": { "type": "string", "maxLength": 10 },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string", "maxLength": 150 },
+        "customerGstin": { "type": "string", "maxLength": 15 },
+        "placeOfSupply": { "type": "string", "maxLength": 50 },
+        "placeOfSupplyCode": { "type": "string", "maxLength": 2 },
+        "isInterState": { "type": "boolean" },
+        "reverseCharge": { "type": "boolean" },
+        "subTotal": { "type": "number" },
+        "discountTotal": { "type": "number" },
+        "totalTaxable": { "type": "number" },
+        "cgstTotal": { "type": "number" },
+        "sgstTotal": { "type": "number" },
+        "igstTotal": { "type": "number" },
+        "cessTotal": { "type": "number" },
+        "roundOff": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "amountInWords": { "type": "string", "maxLength": 300 },
+        "paidAmount": { "type": "number" },
+        "balanceDue": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "terms": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "invoiceNumber", "status", "date", "customerName", "grandTotal"]
+    },
+    "Purchase": {
+      "title": "Purchase",
+      "description": "Purchase bill from supplier",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "billNumber": { "type": "string", "maxLength": 30 },
+        "supplierInvoiceNumber": { "type": "string", "maxLength": 30 },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string", "maxLength": 150 },
+        "supplierGstin": { "type": "string", "maxLength": 15 },
+        "date": { "type": "string", "maxLength": 10 },
+        "dueDate": { "type": "string", "maxLength": 10 },
+        "isInterState": { "type": "boolean" },
+        "totalTaxable": { "type": "number" },
+        "cgstTotal": { "type": "number" },
+        "sgstTotal": { "type": "number" },
+        "igstTotal": { "type": "number" },
+        "cessTotal": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "balanceDue": { "type": "number" },
+        "itcEligibility": { "type": "string", "enum": ["ELIGIBLE", "INELIGIBLE", "REVERSED"] },
+        "status": { "type": "string", "enum": ["UNPAID", "PAID", "PARTIAL"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "billNumber", "supplierName", "grandTotal"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Payment receipt or voucher",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "paymentNumber": { "type": "string", "maxLength": 30 },
+        "type": { "type": "string", "enum": ["RECEIPT", "PAYMENT"] },
+        "partyId": { "type": "string" },
+        "partyName": { "type": "string", "maxLength": 150 },
+        "partyType": { "type": "string", "enum": ["CUSTOMER", "SUPPLIER"] },
+        "date": { "type": "string", "maxLength": 10 },
+        "amount": { "type": "number" },
+        "mode": { "type": "string", "enum": ["CASH", "BANK_TRANSFER", "UPI", "CHEQUE"] },
+        "referenceNo": { "type": "string", "maxLength": 50 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "paymentNumber", "type", "partyName", "amount", "date"]
+    },
+    "CreditDebitNote": {
+      "title": "CreditDebitNote",
+      "description": "Credit Note or Debit Note adjustment document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "noteNumber": { "type": "string", "maxLength": 30 },
+        "noteType": { "type": "string", "enum": ["CREDIT_NOTE", "DEBIT_NOTE"] },
+        "originalInvoiceNumber": { "type": "string", "maxLength": 30 },
+        "partyName": { "type": "string", "maxLength": 150 },
+        "partyGstin": { "type": "string", "maxLength": 15 },
+        "date": { "type": "string", "maxLength": 10 },
+        "reason": { "type": "string", "maxLength": 200 },
+        "totalTaxable": { "type": "number" },
+        "cgstTotal": { "type": "number" },
+        "sgstTotal": { "type": "number" },
+        "igstTotal": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "noteNumber", "noteType", "originalInvoiceNumber", "partyName", "grandTotal"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Business expense entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "expenseNumber": { "type": "string", "maxLength": 30 },
+        "category": { "type": "string", "maxLength": 50 },
+        "date": { "type": "string", "maxLength": 10 },
+        "amount": { "type": "number" },
+        "taxDeductible": { "type": "boolean" },
+        "gstRate": { "type": "number" },
+        "taxAmount": { "type": "number" },
+        "vendorName": { "type": "string", "maxLength": 150 },
+        "vendorGstin": { "type": "string", "maxLength": 15 },
+        "paymentMode": { "type": "string", "maxLength": 30 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "category", "date", "amount"]
+    },
+    "Quotation": {
+      "title": "Quotation",
+      "description": "Quotation or estimate document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "quoteNumber": { "type": "string", "maxLength": 30 },
+        "status": { "type": "string", "enum": ["DRAFT", "SENT", "ACCEPTED", "REJECTED", "CONVERTED"] },
+        "date": { "type": "string", "maxLength": 10 },
+        "validUntil": { "type": "string", "maxLength": 10 },
+        "customerName": { "type": "string", "maxLength": 150 },
+        "grandTotal": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "quoteNumber", "customerName", "grandTotal"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Audit trail log of actions in business",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "action": { "type": "string", "maxLength": 50 },
+        "entityType": { "type": "string", "maxLength": 50 },
+        "entityId": { "type": "string", "maxLength": 50 },
+        "summary": { "type": "string", "maxLength": 300 },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "businessId", "ownerUid", "action", "entityType", "summary", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/businesses/{businessId}": {
+      "schema": { "$ref": "#/entities/Business" },
+      "description": "Business details owned by ownerUid"
+    },
+    "/businesses/{businessId}/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Customers belonging to business"
+    },
+    "/businesses/{businessId}/suppliers/{supplierId}": {
+      "schema": { "$ref": "#/entities/Supplier" },
+      "description": "Suppliers belonging to business"
+    },
+    "/businesses/{businessId}/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Product catalogue with HSN/tax rates"
+    },
+    "/businesses/{businessId}/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/Invoice" },
+      "description": "GST Invoices for sales"
+    },
+    "/businesses/{businessId}/purchases/{purchaseId}": {
+      "schema": { "$ref": "#/entities/Purchase" },
+      "description": "Purchase bills for ITC"
+    },
+    "/businesses/{businessId}/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Payment receipts and vouchers"
+    },
+    "/businesses/{businessId}/credit_notes/{noteId}": {
+      "schema": { "$ref": "#/entities/CreditDebitNote" },
+      "description": "Credit and Debit notes"
+    },
+    "/businesses/{businessId}/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Business expenses"
+    },
+    "/businesses/{businessId}/quotations/{quoteId}": {
+      "schema": { "$ref": "#/entities/Quotation" },
+      "description": "Estimates and Quotations"
+    },
+    "/businesses/{businessId}/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Audit trail entries"
+    }
+  }
+}

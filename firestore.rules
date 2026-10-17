@@ -1,0 +1,99 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBusinessOwner(businessId) {
+      return isSignedIn() && (
+        get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid
+      );
+    }
+
+    // Business collection
+    match /businesses/{businessId} {
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+
+      // Subcollections
+      match /customers/{customerId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, update, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
+      match /suppliers/{supplierId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, update, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
+      match /products/{productId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, update, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
+      match /invoices/{invoiceId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, update, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
+      match /purchases/{purchaseId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, update, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
+      match /payments/{paymentId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, update, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
+      match /credit_notes/{noteId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, update, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
+      match /expenses/{expenseId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, update, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
+      match /quotations/{quoteId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, update, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
+      match /audit_logs/{logId} {
+        allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+        allow update, delete: if false; // Audit logs are immutable
+      }
+    }
+  }
+}

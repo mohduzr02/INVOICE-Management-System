@@ -1,0 +1,6 @@
+{
+  "name": "InvoicePro GST",
+  "description": "Professional Indian GST Billing, Invoicing, Accounting & GSTR Filing System with decimal-safe calculations, inventory, ledgers, and reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
