@@ -32,7 +32,23 @@ import {
   Loader2,
   CheckSquare,
   Square,
+  Edit,
+  Bell,
+  BellRing,
+  MessageSquare,
+  Send,
+  ExternalLink,
+  Clock,
+  ShieldAlert,
+  Phone,
+  Check,
 } from 'lucide-react';
+
+const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2M12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19.01L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.81 13.47 3.81 11.91C3.81 7.37 7.5 3.67 12.05 3.67M9.06 7.42C8.92 7.42 8.68 7.47 8.48 7.69C8.27 7.91 7.7 8.45 7.7 9.54C7.7 10.63 8.49 11.68 8.6 11.83C8.72 11.98 10.15 14.19 12.33 15.13C14.15 15.91 14.52 15.76 14.93 15.72C15.34 15.68 16.27 15.17 16.46 14.62C16.65 14.08 16.65 13.62 16.59 13.52C16.53 13.42 16.39 13.36 16.18 13.26C15.97 13.15 14.94 12.64 14.75 12.57C14.56 12.5 14.42 12.46 14.28 12.67C14.14 12.88 13.75 13.36 13.63 13.5C13.51 13.63 13.39 13.65 13.18 13.55C12.97 13.45 12.3 13.23 11.51 12.52C10.89 11.97 10.47 11.29 10.35 11.08C10.23 10.87 10.34 10.76 10.44 10.66C10.54 10.56 10.66 10.4 10.76 10.28C10.86 10.17 10.9 10.08 10.97 9.94C11.04 9.8 11 9.68 10.95 9.58C10.9 9.47 10.48 8.45 10.31 8.03C10.14 7.62 9.97 7.68 9.84 7.67C9.72 7.67 9.58 7.66 9.44 7.66C9.31 7.66 9.17 7.66 9.06 7.42Z" />
+  </svg>
+);
 
 interface InvoiceRegisterProps {
   onNewInvoice: () => void;
@@ -130,7 +146,7 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
   onEditInvoice,
   onPreviewInvoice,
 }) => {
-  const { business, businesses, invoices, cancelInvoice, deleteInvoice, recordPayment, saveInvoice } = useBusiness();
+  const { business, businesses, invoices, customers, cancelInvoice, deleteInvoice, recordPayment, saveInvoice } = useBusiness();
 
   // Search
   const [searchTerm, setSearchTerm] = useState('');
@@ -167,6 +183,9 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
   // 9. Sorting
   const [sortBy, setSortBy] = useState<SortOption>('date_desc');
 
+  // 10. Automated Overdue Filter
+  const [onlyOverdueFilter, setOnlyOverdueFilter] = useState(false);
+
   // Drawer expansion state
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
@@ -175,6 +194,237 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
   const [bulkCopyType, setBulkCopyType] = useState<'ORIGINAL' | 'DUPLICATE' | 'TRIPLICATE'>('ORIGINAL');
   const [isBulkExporting, setIsBulkExporting] = useState(false);
   const [bulkExportSuccess, setBulkExportSuccess] = useState<string | null>(null);
+
+  // Automated Payment Reminder System States
+  const todayYMD = useMemo(() => new Date().toISOString().split('T')[0], []);
+
+  const checkIsOverdue = (inv: Invoice) => {
+    return inv.status !== 'CANCELLED' && inv.balanceDue > 0 && !!inv.dueDate && inv.dueDate < todayYMD;
+  };
+
+  const getOverdueDays = (inv: Invoice) => {
+    if (!checkIsOverdue(inv)) return 0;
+    const diffTime = Math.abs(new Date(todayYMD).getTime() - new Date(inv.dueDate).getTime());
+    return Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+  };
+
+  const overdueInvoices = useMemo(() => {
+    return invoices.filter(checkIsOverdue);
+  }, [invoices, todayYMD]);
+
+  const totalOverdueAmount = useMemo(() => {
+    return overdueInvoices.reduce((sum, inv) => sum + (inv.balanceDue || 0), 0);
+  }, [overdueInvoices]);
+
+  // Payment Reminder Modal & Queue State
+  const [reminderInvoices, setReminderInvoices] = useState<Invoice[]>([]);
+  const [reminderIndex, setReminderIndex] = useState(0);
+  const [reminderChannel, setReminderChannel] = useState<'WHATSAPP' | 'SMS'>('WHATSAPP');
+  const [reminderTone, setReminderTone] = useState<'GENTLE' | 'URGENT' | 'PAYMENT_LINK'>('GENTLE');
+  const [customRecipientPhone, setCustomRecipientPhone] = useState('');
+  const [reminderCopied, setReminderCopied] = useState(false);
+  const [reminderSentNotice, setReminderSentNotice] = useState<string | null>(null);
+
+  // Persistence of reminder log
+  const REMINDER_STORAGE_KEY = 'invoicepro_payment_reminders_log_v1';
+  const [reminderLogs, setReminderLogs] = useState<Record<string, { timestamp: string; channel: string }>>(() => {
+    try {
+      const raw = localStorage.getItem(REMINDER_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const recordReminderSent = (invoiceId: string, channel: 'WHATSAPP' | 'SMS') => {
+    const updated = {
+      ...reminderLogs,
+      [invoiceId]: {
+        timestamp: new Date().toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }),
+        channel,
+      },
+    };
+    setReminderLogs(updated);
+    try {
+      localStorage.setItem(REMINDER_STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {
+      console.warn('Could not save reminder log', e);
+    }
+    setReminderSentNotice(`Reminder marked as sent via ${channel}!`);
+    setTimeout(() => setReminderSentNotice(null), 3500);
+  };
+
+  const currentReminderInv = reminderInvoices[reminderIndex] || null;
+  const currentReminderBusiness = useMemo(() => {
+    if (!currentReminderInv) return business;
+    return businesses.find((b) => b.id === currentReminderInv.businessId) || business;
+  }, [currentReminderInv, businesses, business]);
+
+  const handleOpenReminder = (inv: Invoice) => {
+    const matched = customers.find(
+      (c) => c.id === inv.customerId || c.name.toLowerCase() === inv.customerName.toLowerCase()
+    );
+    setReminderInvoices([inv]);
+    setReminderIndex(0);
+    setCustomRecipientPhone(inv.customerPhone || matched?.phone || '');
+    setReminderCopied(false);
+    if (checkIsOverdue(inv)) {
+      setReminderTone('URGENT');
+    } else {
+      setReminderTone('GENTLE');
+    }
+  };
+
+  const handleOpenBulkReminders = (invoicesToRemind: Invoice[]) => {
+    if (invoicesToRemind.length === 0) return;
+    const first = invoicesToRemind[0];
+    const matched = customers.find(
+      (c) => c.id === first.customerId || c.name.toLowerCase() === first.customerName.toLowerCase()
+    );
+    setReminderInvoices(invoicesToRemind);
+    setReminderIndex(0);
+    setCustomRecipientPhone(first.customerPhone || matched?.phone || '');
+    setReminderCopied(false);
+    setReminderTone('URGENT');
+  };
+
+  const handleNextReminder = () => {
+    if (reminderIndex < reminderInvoices.length - 1) {
+      const nextIndex = reminderIndex + 1;
+      setReminderIndex(nextIndex);
+      const nextInv = reminderInvoices[nextIndex];
+      const matched = customers.find(
+        (c) => c.id === nextInv.customerId || c.name.toLowerCase() === nextInv.customerName.toLowerCase()
+      );
+      setCustomRecipientPhone(nextInv.customerPhone || matched?.phone || '');
+      setReminderCopied(false);
+    }
+  };
+
+  const handlePrevReminder = () => {
+    if (reminderIndex > 0) {
+      const prevIndex = reminderIndex - 1;
+      setReminderIndex(prevIndex);
+      const prevInv = reminderInvoices[prevIndex];
+      const matched = customers.find(
+        (c) => c.id === prevInv.customerId || c.name.toLowerCase() === prevInv.customerName.toLowerCase()
+      );
+      setCustomRecipientPhone(prevInv.customerPhone || matched?.phone || '');
+      setReminderCopied(false);
+    }
+  };
+
+  // Personalized dynamic reminder message
+  const reminderMessage = useMemo(() => {
+    if (!currentReminderInv) return '';
+    const inv = currentReminderInv;
+    const biz = currentReminderBusiness;
+    const seller = biz.tradeName || biz.name || 'Our Company';
+    const days = getOverdueDays(inv);
+    const publicUrl = `${window.location.origin}${window.location.pathname}?invoiceId=${encodeURIComponent(inv.id)}`;
+
+    if (reminderChannel === 'WHATSAPP') {
+      if (reminderTone === 'URGENT') {
+        return `⚠️ *OVERDUE PAYMENT NOTICE: Invoice ${inv.invoiceNumber}*
+From: *${seller}*
+────────────────────────
+Dear *${inv.customerName}*,
+
+This is an urgent reminder that payment for Invoice *#${inv.invoiceNumber}* was due on *${inv.dueDate}* and is now *${days > 0 ? `${days} DAYS OVERDUE` : 'DUE TODAY'}*.
+
+• *Original Invoice Amount:* ${formatINR(inv.grandTotal)}
+• *Outstanding Balance Due:* *${formatINR(inv.balanceDue)}*
+
+Kindly clear this payment at the earliest to prevent any disruption in accounts or services.
+
+🏦 *Payment Credentials:*
+• Bank: ${biz.bankName || 'N/A'}
+• A/c No: ${biz.accountNumber || 'N/A'}
+• IFSC: ${biz.ifsc || 'N/A'}
+${biz.upiId ? `• UPI ID: ${biz.upiId}\n` : ''}🔗 *View & Download Invoice:* ${publicUrl}
+
+If payment has already been remitted, please reply with the reference number or receipt.
+Thank you,
+*${seller}*`;
+      } else if (reminderTone === 'PAYMENT_LINK') {
+        return `💳 *QUICK PAYMENT REQUEST: Invoice ${inv.invoiceNumber}*
+From: *${seller}*
+────────────────────────
+Hi *${inv.customerName}*,
+
+Here are the payment details for your outstanding invoice:
+• *Invoice No:* ${inv.invoiceNumber}
+• *Due Date:* ${inv.dueDate || 'Immediate'}
+• *Amount Payable:* *${formatINR(inv.balanceDue)}*
+
+${biz.upiId ? `📲 *Instant UPI Payment ID:* \`${biz.upiId}\`\n` : ''}🏦 *Bank Details:*
+• Bank: ${biz.bankName || 'N/A'} | A/c: ${biz.accountNumber || 'N/A'} | IFSC: ${biz.ifsc || 'N/A'}
+
+🔗 *Click to view your invoice:*
+${publicUrl}
+
+Thank you for your business!
+_${seller}_`;
+      } else {
+        // GENTLE (Default)
+        return `🔔 *GENTLE PAYMENT REMINDER: Invoice ${inv.invoiceNumber}*
+From: *${seller}*
+────────────────────────
+Dear *${inv.customerName}*,
+
+We hope you are doing well! This is a courteous reminder regarding your outstanding invoice:
+
+• *Invoice Number:* ${inv.invoiceNumber}
+• *Invoice Date:* ${inv.date}
+• *Due Date:* ${inv.dueDate} ${days > 0 ? `(${days} days overdue)` : ''}
+• *Balance Due:* *${formatINR(inv.balanceDue)}*
+
+🏦 *Bank Account Details:*
+• Bank: ${biz.bankName || 'N/A'}
+• Account No: ${biz.accountNumber || 'N/A'}
+• IFSC: ${biz.ifsc || 'N/A'}
+${biz.upiId ? `• UPI ID: ${biz.upiId}\n` : ''}🔗 *Online Invoice Copy:* ${publicUrl}
+
+Please ignore this reminder if payment has already been processed.
+Warm regards,
+*${seller}*`;
+      }
+    } else {
+      // SMS format
+      if (reminderTone === 'URGENT') {
+        return `URGENT: Payment of ${formatINR(inv.balanceDue)} for Invoice #${inv.invoiceNumber} from ${seller} is ${days > 0 ? `${days} days overdue` : 'due'}. Pay to ${biz.bankName || 'Bank'} A/c ${biz.accountNumber || ''} IFSC ${biz.ifsc || ''}${biz.upiId ? ` UPI: ${biz.upiId}` : ''}. View: ${publicUrl}`;
+      } else if (reminderTone === 'PAYMENT_LINK') {
+        return `Payment Request from ${seller}: ${formatINR(inv.balanceDue)} is due for Inv #${inv.invoiceNumber}.${biz.upiId ? ` Pay via UPI: ${biz.upiId}.` : ''} Bank: ${biz.bankName} A/c: ${biz.accountNumber} IFSC: ${biz.ifsc}. View invoice: ${publicUrl}`;
+      } else {
+        // GENTLE SMS
+        return `Dear ${inv.customerName}, gentle reminder from ${seller}: ${formatINR(inv.balanceDue)} is due for Invoice #${inv.invoiceNumber} on ${inv.dueDate}. Bank: ${biz.bankName} A/c ${biz.accountNumber} IFSC ${biz.ifsc}. View: ${publicUrl}`;
+      }
+    }
+  }, [currentReminderInv, currentReminderBusiness, reminderChannel, reminderTone, todayYMD]);
+
+  const reminderWhatsAppUrl = useMemo(() => {
+    const raw = customRecipientPhone.replace(/[^0-9]/g, '');
+    let clean = raw;
+    if (raw.length === 10) clean = `91${raw}`;
+    const enc = encodeURIComponent(reminderMessage);
+    return clean
+      ? `https://api.whatsapp.com/send?phone=${clean}&text=${enc}`
+      : `https://api.whatsapp.com/send?text=${enc}`;
+  }, [customRecipientPhone, reminderMessage]);
+
+  const reminderSmsUrl = useMemo(() => {
+    const raw = customRecipientPhone.replace(/[^0-9]/g, '');
+    let clean = raw;
+    if (raw.length === 10) clean = `+91${raw}`;
+    const enc = encodeURIComponent(reminderMessage);
+    return clean ? `sms:${clean}?body=${enc}` : `sms:?body=${enc}`;
+  }, [customRecipientPhone, reminderMessage]);
+
+  const handleCopyReminderText = () => {
+    navigator.clipboard.writeText(reminderMessage);
+    setReminderCopied(true);
+    setTimeout(() => setReminderCopied(false), 3000);
+  };
 
   // Payment Recording Modal
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
@@ -225,6 +475,7 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
     if (typeFilter !== 'ALL') count++;
     if (customerFilter !== 'ALL') count++;
     if (reverseChargeFilter !== 'ALL') count++;
+    if (onlyOverdueFilter) count++;
     return count;
   }, [
     searchTerm,
@@ -241,6 +492,7 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
     typeFilter,
     customerFilter,
     reverseChargeFilter,
+    onlyOverdueFilter,
   ]);
 
   // Clear all filters
@@ -259,6 +511,7 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
     setTypeFilter('ALL');
     setCustomerFilter('ALL');
     setReverseChargeFilter('ALL');
+    setOnlyOverdueFilter(false);
     setSortBy('date_desc');
   };
 
@@ -331,6 +584,9 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
         if (reverseChargeFilter === 'YES' && !inv.reverseCharge) return false;
         if (reverseChargeFilter === 'NO' && inv.reverseCharge) return false;
 
+        // 11. Only Overdue Invoices Filter
+        if (onlyOverdueFilter && !checkIsOverdue(inv)) return false;
+
         return true;
       })
       .sort((a, b) => {
@@ -368,7 +624,9 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
     typeFilter,
     customerFilter,
     reverseChargeFilter,
+    onlyOverdueFilter,
     sortBy,
+    todayYMD,
   ]);
 
   // Aggregate sums of filtered results
@@ -552,6 +810,53 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Automated Overdue Payment Alert Banner */}
+      {overdueInvoices.length > 0 && (
+        <div className="bg-gradient-to-r from-rose-50 to-amber-50 border border-rose-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-rose-100 text-rose-700 rounded-xl shrink-0">
+              <ShieldAlert className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="font-bold text-rose-950 text-xs sm:text-sm">
+                  Automated Payment Alert: {overdueInvoices.length} Overdue Invoice{overdueInvoices.length > 1 ? 's' : ''}
+                </h4>
+                <span className="bg-rose-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                  Action Required
+                </span>
+              </div>
+              <p className="text-xs text-rose-700 mt-0.5">
+                Total overdue receivables: <strong className="font-mono">{formatINR(totalOverdueAmount)}</strong>. Send automated WhatsApp or SMS payment reminders to recover dues faster.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setOnlyOverdueFilter((prev) => !prev)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                onlyOverdueFilter
+                  ? 'bg-rose-600 text-white border-rose-600'
+                  : 'bg-white text-rose-800 border-rose-200 hover:bg-rose-50'
+              }`}
+            >
+              {onlyOverdueFilter ? 'Showing Overdue Only' : `Filter Overdue (${overdueInvoices.length})`}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleOpenBulkReminders(overdueInvoices)}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer"
+            >
+              <BellRing className="w-3.5 h-3.5" />
+              <span>Send Reminders to All</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Summary KPI Cards of Filtered Invoices */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1100,6 +1405,27 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
               )}
             </button>
 
+            {/* Send Bulk Payment Reminders */}
+            {selectedInvoices.some((i) => i.balanceDue > 0 && i.status !== 'CANCELLED') && (
+              <button
+                type="button"
+                onClick={() =>
+                  handleOpenBulkReminders(
+                    selectedInvoices.filter((i) => i.balanceDue > 0 && i.status !== 'CANCELLED')
+                  )
+                }
+                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer"
+                title="Send personalized payment reminders to all selected unpaid customers"
+              >
+                <BellRing className="w-4 h-4" />
+                <span>
+                  Remind Unpaid (
+                  {selectedInvoices.filter((i) => i.balanceDue > 0 && i.status !== 'CANCELLED').length}
+                  )
+                </span>
+              </button>
+            )}
+
             {/* Print Consolidated */}
             <button
               type="button"
@@ -1236,6 +1562,19 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
                         <span className={inv.balanceDue > 0 ? 'text-amber-700 font-bold' : 'text-emerald-700'}>
                           {formatINR(inv.balanceDue)}
                         </span>
+                        {checkIsOverdue(inv) && (
+                          <div className="flex items-center justify-end gap-1 mt-0.5">
+                            <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1 py-0.2 rounded">
+                              <Clock className="w-2.5 h-2.5 text-rose-600" />
+                              {getOverdueDays(inv)}d overdue
+                            </span>
+                          </div>
+                        )}
+                        {reminderLogs[inv.id] && (
+                          <span className="text-[9px] text-slate-400 block font-sans" title={`Last reminder: ${reminderLogs[inv.id].timestamp} via ${reminderLogs[inv.id].channel}`}>
+                            Reminded ({reminderLogs[inv.id].channel})
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-3 text-center">
                         <span
@@ -1283,14 +1622,33 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
                             <Printer className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Edit / Draft */}
-                          {inv.status === 'DRAFT' && (
+                          {/* Edit Invoice (available for all non-cancelled invoices) */}
+                          {inv.status !== 'CANCELLED' && (
                             <button
                               onClick={() => onEditInvoice(inv.id)}
-                              className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-colors cursor-pointer"
-                              title="Edit Draft"
+                              className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+                              title={inv.status === 'DRAFT' ? 'Edit Draft' : 'Edit Invoice'}
                             >
-                              <FileText className="w-3.5 h-3.5" />
+                              <Edit className="w-3.5 h-3.5 text-indigo-600" />
+                            </button>
+                          )}
+
+                          {/* Send Automated Payment Reminder (WhatsApp / SMS) */}
+                          {inv.status !== 'CANCELLED' && inv.balanceDue > 0 && (
+                            <button
+                              onClick={() => handleOpenReminder(inv)}
+                              className={`p-1 rounded transition-colors cursor-pointer ${
+                                checkIsOverdue(inv)
+                                  ? 'text-rose-600 hover:text-rose-700 hover:bg-rose-50'
+                                  : 'text-amber-600 hover:text-amber-700 hover:bg-amber-50'
+                              }`}
+                              title={
+                                checkIsOverdue(inv)
+                                  ? `Send Overdue Payment Reminder (${getOverdueDays(inv)} days overdue)`
+                                  : 'Send Payment Reminder (WhatsApp / SMS)'
+                              }
+                            >
+                              <Bell className="w-3.5 h-3.5" />
                             </button>
                           )}
 
@@ -1501,6 +1859,282 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Automated Payment Reminder System Modal (WhatsApp & SMS) */}
+      {reminderInvoices.length > 0 && currentReminderInv && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[92vh] animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div
+              className={`px-5 py-4 text-white flex items-center justify-between ${
+                reminderChannel === 'WHATSAPP' ? 'bg-emerald-600' : 'bg-indigo-600'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-black/20 rounded-xl">
+                  {reminderChannel === 'WHATSAPP' ? (
+                    <WhatsAppIcon className="w-5 h-5 text-white" />
+                  ) : (
+                    <MessageSquare className="w-5 h-5 text-white" />
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-base leading-tight">Send Payment Reminder</h3>
+                    {checkIsOverdue(currentReminderInv) && (
+                      <span className="bg-rose-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">
+                        {getOverdueDays(currentReminderInv)}d Overdue
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-white/80">
+                    {reminderInvoices.length > 1
+                      ? `Batch reminder ${reminderIndex + 1} of ${reminderInvoices.length} • Invoice #${currentReminderInv.invoiceNumber}`
+                      : `Invoice #${currentReminderInv.invoiceNumber} for ${currentReminderInv.customerName}`}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setReminderInvoices([])}
+                className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-black/20 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Feedback Notice */}
+            {reminderSentNotice && (
+              <div className="bg-emerald-50 border-b border-emerald-200 px-4 py-2 text-xs font-semibold text-emerald-800 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{reminderSentNotice}</span>
+              </div>
+            )}
+
+            {/* Body */}
+            <div className="p-5 space-y-4 overflow-y-auto">
+              {/* Channel Selector */}
+              <div className="flex items-center p-1 bg-slate-100 rounded-xl gap-1">
+                <button
+                  type="button"
+                  onClick={() => setReminderChannel('WHATSAPP')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    reminderChannel === 'WHATSAPP'
+                      ? 'bg-white text-emerald-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <WhatsAppIcon className="w-4 h-4" />
+                  <span>WhatsApp Message</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReminderChannel('SMS')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    reminderChannel === 'SMS'
+                      ? 'bg-white text-indigo-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  <span>SMS Text</span>
+                </button>
+              </div>
+
+              {/* Customer & Phone details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs">
+                <div>
+                  <span className="text-slate-500 font-semibold block uppercase text-[10px]">Recipient / Customer</span>
+                  <p className="font-bold text-slate-800 text-sm mt-0.5 truncate">{currentReminderInv.customerName}</p>
+                  <p className="text-[11px] text-slate-500">
+                    Due: <strong className="text-slate-700">{currentReminderInv.dueDate}</strong> • Balance:{' '}
+                    <strong className="text-amber-700 font-mono">{formatINR(currentReminderInv.balanceDue)}</strong>
+                  </p>
+                </div>
+                <div>
+                  <label className="text-slate-600 font-bold block uppercase text-[10px] mb-1">
+                    Mobile Number (WhatsApp / SMS)
+                  </label>
+                  <div className="relative">
+                    <Phone className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="tel"
+                      value={customRecipientPhone}
+                      onChange={(e) => setCustomRecipientPhone(e.target.value)}
+                      placeholder="e.g. 9876543210 (or +91)"
+                      className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg font-mono focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Template / Tone Selector */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+                  Select Reminder Tone / Template
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setReminderTone('GENTLE')}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer text-xs ${
+                      reminderTone === 'GENTLE'
+                        ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 font-semibold ring-1 ring-indigo-600'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Bell className="w-3.5 h-3.5 text-indigo-600" />
+                      <span className="font-bold text-xs">Gentle Follow-Up</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 line-clamp-2">
+                      Courteous reminder with invoice number, balance, and bank info.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setReminderTone('URGENT')}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer text-xs ${
+                      reminderTone === 'URGENT'
+                        ? 'border-rose-600 bg-rose-50/70 text-rose-900 font-semibold ring-1 ring-rose-600'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <ShieldAlert className="w-3.5 h-3.5 text-rose-600" />
+                      <span className="font-bold text-xs">Urgent Overdue</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 line-clamp-2">
+                      Emphasizes overdue days and urges immediate settlement.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setReminderTone('PAYMENT_LINK')}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer text-xs ${
+                      reminderTone === 'PAYMENT_LINK'
+                        ? 'border-emerald-600 bg-emerald-50/70 text-emerald-900 font-semibold ring-1 ring-emerald-600'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <CreditCard className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="font-bold text-xs">UPI & Quick Pay</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 line-clamp-2">
+                      Provides instant UPI ID and link to open and view the invoice.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Message Live Preview */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                    Personalized {reminderChannel === 'WHATSAPP' ? 'WhatsApp' : 'SMS'} Preview
+                  </label>
+                  <span className="text-[11px] text-slate-400">
+                    {reminderChannel === 'WHATSAPP' ? 'Formatted with WhatsApp Markdown' : 'Standard SMS compliant'}
+                  </span>
+                </div>
+                <div
+                  className={`rounded-xl p-3 max-h-48 overflow-y-auto text-xs font-mono whitespace-pre-wrap leading-relaxed shadow-inner border ${
+                    reminderChannel === 'WHATSAPP'
+                      ? 'bg-emerald-50/50 border-emerald-200 text-slate-800'
+                      : 'bg-indigo-50/50 border-indigo-200 text-slate-800'
+                  }`}
+                >
+                  {reminderMessage}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="bg-slate-50 px-5 py-3.5 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              {/* Batch navigation or copy button */}
+              {reminderInvoices.length > 1 ? (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={reminderIndex === 0}
+                    onClick={handlePrevReminder}
+                    className="px-2.5 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-lg disabled:opacity-40 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-xs text-slate-600 font-medium px-1">
+                    {reminderIndex + 1} of {reminderInvoices.length}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={reminderIndex === reminderInvoices.length - 1}
+                    onClick={handleNextReminder}
+                    className="px-2.5 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-lg disabled:opacity-40 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Next
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleCopyReminderText}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 cursor-pointer transition-colors shadow-2xs"
+                >
+                  {reminderCopied ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Copy Text</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReminderInvoices([])}
+                  className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-800 rounded-lg hover:bg-slate-200/60 cursor-pointer transition-colors"
+                >
+                  Close
+                </button>
+
+                {reminderChannel === 'WHATSAPP' ? (
+                  <a
+                    href={reminderWhatsAppUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => recordReminderSent(currentReminderInv.id, 'WHATSAPP')}
+                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-sm"
+                  >
+                    <WhatsAppIcon className="w-4 h-4" />
+                    <span>Send via WhatsApp</span>
+                    <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+                  </a>
+                ) : (
+                  <a
+                    href={reminderSmsUrl}
+                    onClick={() => recordReminderSent(currentReminderInv.id, 'SMS')}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-sm"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>Send via SMS App</span>
+                    <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+                  </a>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}

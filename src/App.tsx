@@ -54,6 +54,24 @@ function MainLayout() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Support direct public link to invoice (?invoiceId=... or ?invoice=...)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const targetId = params.get('invoiceId') || params.get('invoice');
+      if (targetId && invoices.length > 0) {
+        const found = invoices.find(
+          (inv) => inv.id === targetId || inv.invoiceNumber.toLowerCase() === targetId.toLowerCase()
+        );
+        if (found) {
+          setPreviewInvoice(found);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not parse invoice URL params', e);
+    }
+  }, [invoices]);
+
   const handleCreateNewInvoice = () => {
     setEditingInvoiceId(null);
     setCurrentTab('invoice-generator');
@@ -193,6 +211,10 @@ function MainLayout() {
         <InvoicePreviewModal
           invoice={previewInvoice}
           onClose={() => setPreviewInvoice(null)}
+          onEdit={(id) => {
+            setPreviewInvoice(null);
+            handleEditInvoice(id);
+          }}
         />
       )}
 

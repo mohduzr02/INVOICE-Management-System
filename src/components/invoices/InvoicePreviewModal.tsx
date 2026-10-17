@@ -1,19 +1,174 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Invoice } from '../../types';
 import { useBusiness } from '../../context/BusinessContext';
 import { formatINR } from '../../services/gstEngine';
 import { generateInvoicePDF } from '../../services/pdfGenerator';
-import { X, FileDown, Printer, Share2, Check, ShieldCheck, Stamp } from 'lucide-react';
+import {
+  X,
+  FileDown,
+  Printer,
+  Share2,
+  Check,
+  ShieldCheck,
+  Stamp,
+  Copy,
+  ExternalLink,
+  Link2,
+  Phone,
+  Sparkles,
+  CheckCircle2,
+  Edit,
+} from 'lucide-react';
+
+const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91C2.13 13.66 2.59 15.36 3.45 16.86L2.05 22L7.3 20.62C8.75 21.41 10.38 21.83 12.04 21.83C17.5 21.83 21.95 17.38 21.95 11.92C21.95 9.27 20.92 6.78 19.05 4.91C17.18 3.03 14.69 2 12.04 2M12.05 3.67C14.25 3.67 16.31 4.53 17.87 6.09C19.42 7.65 20.28 9.72 20.28 11.92C20.28 16.46 16.58 20.15 12.04 20.15C10.56 20.15 9.11 19.76 7.85 19.01L7.55 18.83L4.43 19.65L5.26 16.61L5.06 16.29C4.24 14.99 3.81 13.47 3.81 11.91C3.81 7.37 7.5 3.67 12.05 3.67M9.06 7.42C8.92 7.42 8.68 7.47 8.48 7.69C8.27 7.91 7.7 8.45 7.7 9.54C7.7 10.63 8.49 11.68 8.6 11.83C8.72 11.98 10.15 14.19 12.33 15.13C14.15 15.91 14.52 15.76 14.93 15.72C15.34 15.68 16.27 15.17 16.46 14.62C16.65 14.08 16.65 13.62 16.59 13.52C16.53 13.42 16.39 13.36 16.18 13.26C15.97 13.15 14.94 12.64 14.75 12.57C14.56 12.5 14.42 12.46 14.28 12.67C14.14 12.88 13.75 13.36 13.63 13.5C13.51 13.63 13.39 13.65 13.18 13.55C12.97 13.45 12.3 13.23 11.51 12.52C10.89 11.97 10.47 11.29 10.35 11.08C10.23 10.87 10.34 10.76 10.44 10.66C10.54 10.56 10.66 10.4 10.76 10.28C10.86 10.17 10.9 10.08 10.97 9.94C11.04 9.8 11 9.68 10.95 9.58C10.9 9.47 10.48 8.45 10.31 8.03C10.14 7.62 9.97 7.68 9.84 7.67C9.72 7.67 9.58 7.66 9.44 7.66C9.31 7.66 9.17 7.66 9.06 7.42Z" />
+  </svg>
+);
 
 interface InvoicePreviewModalProps {
   invoice: Invoice;
   onClose: () => void;
+  onEdit?: (invoiceId: string) => void;
 }
 
-export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoice, onClose }) => {
-  const { business } = useBusiness();
+export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoice, onClose, onEdit }) => {
+  const { business: defaultBusiness, businesses, customers } = useBusiness();
+  const business = businesses.find((b) => b.id === invoice.businessId) || defaultBusiness;
+
   const [copied, setCopied] = useState(false);
   const [copyType, setCopyType] = useState<'ORIGINAL' | 'DUPLICATE' | 'TRIPLICATE'>('ORIGINAL');
+
+  // WhatsApp Share States
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+  const matchedCustomer = useMemo(() => {
+    return customers.find(
+      (c) => c.id === invoice.customerId || c.name.toLowerCase() === invoice.customerName.toLowerCase()
+    );
+  }, [customers, invoice.customerId, invoice.customerName]);
+
+  const [recipientPhone, setRecipientPhone] = useState(
+    invoice.customerPhone || matchedCustomer?.phone || ''
+  );
+  const [includePublicLink, setIncludePublicLink] = useState(true);
+  const [includeBankDetails, setIncludeBankDetails] = useState(true);
+  const [includeItemsSummary, setIncludeItemsSummary] = useState(true);
+  const [copiedWhatsAppMsg, setCopiedWhatsAppMsg] = useState(false);
+  const [copiedPublicLink, setCopiedPublicLink] = useState(false);
+
+  // Generate public link to invoice
+  const publicInvoiceLink = useMemo(() => {
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('invoiceId', invoice.id);
+      return url.toString();
+    } catch {
+      return `${window.location.origin}${window.location.pathname}?invoiceId=${invoice.id}`;
+    }
+  }, [invoice.id]);
+
+  // Generate structured, professional WhatsApp message
+  const generatedWhatsAppMessage = useMemo(() => {
+    const sellerTitle = business.tradeName || business.name || 'Our Company';
+    const lines: string[] = [];
+
+    lines.push(`🧾 *TAX INVOICE: ${invoice.invoiceNumber}*`);
+    lines.push(`*From:* ${sellerTitle}`);
+    lines.push('────────────────────────');
+    lines.push(`Dear *${invoice.customerName}*,`);
+    lines.push('');
+    lines.push('Please find the summary of your GST Tax Invoice:');
+    lines.push(`• *Invoice No:* ${invoice.invoiceNumber}`);
+    lines.push(`• *Date:* ${invoice.date}`);
+    if (invoice.dueDate) {
+      lines.push(`• *Due Date:* ${invoice.dueDate}`);
+    }
+    lines.push(
+      `• *Total Taxable:* ₹${Number(invoice.totalTaxable || 0).toLocaleString('en-IN', {
+        minimumFractionDigits: 2,
+      })}`
+    );
+    const totalTax =
+      (invoice.cgstTotal || 0) +
+      (invoice.sgstTotal || 0) +
+      (invoice.igstTotal || 0) +
+      (invoice.cessTotal || 0);
+    lines.push(
+      `• *GST Amount:* ₹${Number(totalTax).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+    );
+    lines.push(
+      `• *Grand Total:* ₹${Number(invoice.grandTotal || 0).toLocaleString('en-IN', {
+        minimumFractionDigits: 2,
+      })}`
+    );
+    lines.push(
+      `• *Balance Due:* ₹${Number(invoice.balanceDue || 0).toLocaleString('en-IN', {
+        minimumFractionDigits: 2,
+      })}`
+    );
+    lines.push(`• *Status:* ${invoice.status}`);
+
+    if (includeItemsSummary && invoice.items && invoice.items.length > 0) {
+      lines.push('');
+      lines.push('📦 *Itemized Summary:*');
+      invoice.items.slice(0, 5).forEach((item, idx) => {
+        lines.push(
+          `${idx + 1}. ${item.name} (${item.quantity} ${item.unit || 'PCS'}) — ₹${Number(
+            item.totalAmount || 0
+          ).toFixed(2)}`
+        );
+      });
+      if (invoice.items.length > 5) {
+        lines.push(`   _...and ${invoice.items.length - 5} more item(s)_`);
+      }
+    }
+
+    if (
+      includeBankDetails &&
+      (business.bankName || business.accountNumber || business.upiId)
+    ) {
+      lines.push('');
+      lines.push('🏦 *Payment Details:*');
+      if (business.bankName) lines.push(`• Bank: ${business.bankName}`);
+      if (business.accountNumber) lines.push(`• A/c No: ${business.accountNumber}`);
+      if (business.ifsc) lines.push(`• IFSC: ${business.ifsc}`);
+      if (business.branch) lines.push(`• Branch: ${business.branch}`);
+      if (business.upiId) lines.push(`• UPI ID: ${business.upiId}`);
+    }
+
+    if (includePublicLink) {
+      lines.push('');
+      lines.push('🔗 *View & Download Invoice Online:*');
+      lines.push(publicInvoiceLink);
+    }
+
+    lines.push('');
+    lines.push('Thank you for your business!');
+    lines.push(`_${sellerTitle}_`);
+
+    return lines.join('\n');
+  }, [
+    invoice,
+    business,
+    includeItemsSummary,
+    includeBankDetails,
+    includePublicLink,
+    publicInvoiceLink,
+  ]);
+
+  // Compute clean phone & WhatsApp URL
+  const whatsappUrl = useMemo(() => {
+    const raw = recipientPhone.replace(/[^0-9]/g, '');
+    let cleanPhone = raw;
+    if (raw.length === 10) {
+      cleanPhone = `91${raw}`;
+    }
+    const encoded = encodeURIComponent(generatedWhatsAppMessage);
+    if (cleanPhone) {
+      return `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encoded}`;
+    }
+    return `https://api.whatsapp.com/send?text=${encoded}`;
+  }, [recipientPhone, generatedWhatsAppMessage]);
 
   const handleShare = () => {
     const text = `Invoice #${invoice.invoiceNumber} for ${invoice.customerName}: Grand Total ${formatINR(
@@ -24,6 +179,18 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 3000);
+  };
+
+  const handleCopyWhatsAppMessage = () => {
+    navigator.clipboard.writeText(generatedWhatsAppMessage);
+    setCopiedWhatsAppMsg(true);
+    setTimeout(() => setCopiedWhatsAppMsg(false), 3000);
+  };
+
+  const handleCopyPublicLink = () => {
+    navigator.clipboard.writeText(publicInvoiceLink);
+    setCopiedPublicLink(true);
+    setTimeout(() => setCopiedPublicLink(false), 3000);
   };
 
   // Compute HSN summary
@@ -86,6 +253,16 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Share via WhatsApp Button */}
+            <button
+              onClick={() => setShowWhatsAppModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-colors"
+              title="Share invoice summary & public link via WhatsApp"
+            >
+              <WhatsAppIcon className="w-3.5 h-3.5" />
+              <span>Share via WhatsApp</span>
+            </button>
+
             <button
               onClick={() => generateInvoicePDF(invoice, business, 'download', copyType)}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-colors"
@@ -106,10 +283,25 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
             <button
               onClick={handleShare}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+              title="Copy quick summary to clipboard"
             >
               {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Share2 className="w-3.5 h-3.5" />}
               <span>{copied ? 'Copied' : 'Share'}</span>
             </button>
+
+            {onEdit && (
+              <button
+                onClick={() => {
+                  onClose();
+                  onEdit(invoice.id);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                title="Edit this invoice"
+              >
+                <Edit className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Edit</span>
+              </button>
+            )}
 
             <button
               onClick={onClose}
@@ -527,6 +719,185 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
             </div>
           </div>
         </div>
+
+        {/* WhatsApp Sharing Dialog Modal */}
+        {showWhatsAppModal && (
+          <div className="fixed inset-0 z-60 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+              {/* Header */}
+              <div className="bg-emerald-600 px-5 py-4 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-emerald-700/60 rounded-xl">
+                    <WhatsAppIcon className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base leading-tight">Share Invoice via WhatsApp</h3>
+                    <p className="text-xs text-emerald-100">
+                      Pre-filled message & public link for {invoice.customerName}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowWhatsAppModal(false)}
+                  className="p-1.5 rounded-lg text-emerald-100 hover:text-white hover:bg-emerald-700/60 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 space-y-4 overflow-y-auto">
+                {/* Customer Phone Input */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">
+                    Customer Phone Number
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                      <Phone className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="tel"
+                      value={recipientPhone}
+                      onChange={(e) => setRecipientPhone(e.target.value)}
+                      placeholder="e.g. 9876543210 (or with country code +91)"
+                      className="w-full pl-9 pr-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-mono"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    {recipientPhone.trim()
+                      ? 'WhatsApp will open directly with this contact.'
+                      : 'Leave blank to select any contact inside WhatsApp.'}
+                  </p>
+                </div>
+
+                {/* Content Customization Toggles */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5 text-xs text-slate-700">
+                  <p className="font-bold text-slate-900 text-xs uppercase tracking-wide">
+                    Include in WhatsApp Message:
+                  </p>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={includePublicLink}
+                      onChange={(e) => setIncludePublicLink(e.target.checked)}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                    />
+                    <span className="font-medium">
+                      Public Link to View & Download Invoice Online
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={includeBankDetails}
+                      onChange={(e) => setIncludeBankDetails(e.target.checked)}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                    />
+                    <span className="font-medium">
+                      Bank & UPI Payment Credentials (IFSC, A/c, UPI ID)
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={includeItemsSummary}
+                      onChange={(e) => setIncludeItemsSummary(e.target.checked)}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                    />
+                    <span className="font-medium">
+                      Itemized Breakdown of Products / Services
+                    </span>
+                  </label>
+                </div>
+
+                {/* Message Preview Box */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                      Message Preview
+                    </label>
+                    <span className="text-[11px] text-slate-400">Pre-formatted with WhatsApp Markdown</span>
+                  </div>
+                  <div className="bg-emerald-50/50 border border-emerald-200/80 rounded-xl p-3 max-h-44 overflow-y-auto text-xs font-mono whitespace-pre-wrap text-slate-800 leading-relaxed shadow-inner">
+                    {generatedWhatsAppMessage}
+                  </div>
+                </div>
+
+                {/* Public Link Quick Box */}
+                {includePublicLink && (
+                  <div className="flex items-center gap-2 bg-slate-100 p-2.5 rounded-lg border border-slate-200 text-xs">
+                    <Link2 className="w-4 h-4 text-slate-500 shrink-0" />
+                    <span className="truncate font-mono text-slate-600 text-[11px] flex-1">
+                      {publicInvoiceLink}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyPublicLink}
+                      className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-slate-300 rounded font-semibold text-slate-700 shrink-0 cursor-pointer flex items-center gap-1 transition-colors"
+                    >
+                      {copiedPublicLink ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy Link</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer Actions */}
+              <div className="bg-slate-50 px-5 py-3.5 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleCopyWhatsAppMessage}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 cursor-pointer transition-colors shadow-2xs"
+                >
+                  {copiedWhatsAppMsg ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span className="text-emerald-700">Message Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4 text-slate-600" />
+                      <span>Copy Full Message</span>
+                    </>
+                  )}
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowWhatsAppModal(false)}
+                    className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:text-slate-800 rounded-lg hover:bg-slate-200/60 cursor-pointer transition-colors"
+                  >
+                    Cancel
+                  </button>
+
+                  <a
+                    href={whatsappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setShowWhatsAppModal(false)}
+                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-sm"
+                  >
+                    <WhatsAppIcon className="w-4 h-4" />
+                    <span>Open in WhatsApp</span>
+                    <ExternalLink className="w-3.5 h-3.5 opacity-80" />
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

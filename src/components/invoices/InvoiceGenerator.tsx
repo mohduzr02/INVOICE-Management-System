@@ -37,6 +37,13 @@ import {
   Search,
   X,
   CreditCard,
+  CheckCircle2,
+  Clock,
+  Loader2,
+  Sparkles,
+  ArrowLeft,
+  RotateCcw,
+  Edit3,
 } from 'lucide-react';
 import { validateGSTIN } from '../../utils/gstinValidator';
 import { CompanyModal } from '../common/CompanyModal';
@@ -121,6 +128,139 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Auto-Save States & Storage
+  const AUTOSAVE_STORAGE_KEY = 'invoicepro_autosave_invoice_draft_v1';
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(true);
+  const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
+  const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
+  const [hasUnsavedDraft, setHasUnsavedDraft] = useState<boolean>(false);
+  const [draftInfo, setDraftInfo] = useState<{ time: string; customerName: string; itemCount: number } | null>(null);
+  const isInitialMount = React.useRef(true);
+
+  // Inspect storage for recoverable draft on mount
+  useEffect(() => {
+    if (!initialInvoiceId) {
+      try {
+        const raw = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && (parsed.customerName || (parsed.items && parsed.items.length > 0 && parsed.items[0].name))) {
+            setHasUnsavedDraft(true);
+            setDraftInfo({
+              time: parsed.savedAt || 'earlier session',
+              customerName: parsed.customerName || 'Untitled customer',
+              itemCount: parsed.items?.length || 1,
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Could not inspect autosave draft', e);
+      }
+    }
+  }, [initialInvoiceId]);
+
+  const handleRestoreDraft = () => {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.invoiceType) setInvoiceType(parsed.invoiceType);
+        if (parsed.invoiceNumber) setInvoiceNumber(parsed.invoiceNumber);
+        if (parsed.date) setDate(parsed.date);
+        if (parsed.dueDate) setDueDate(parsed.dueDate);
+        if (parsed.selectedCustomerId) setSelectedCustomerId(parsed.selectedCustomerId);
+        if (parsed.customerName) setCustomerName(parsed.customerName);
+        if (parsed.customerGstin) setCustomerGstin(parsed.customerGstin);
+        if (parsed.customerAddress) setCustomerAddress(parsed.customerAddress);
+        if (parsed.customerPhone) setCustomerPhone(parsed.customerPhone);
+        if (parsed.placeOfSupplyCode) setPlaceOfSupplyCode(parsed.placeOfSupplyCode);
+        if (parsed.reverseCharge !== undefined) setReverseCharge(parsed.reverseCharge);
+        if (parsed.notes) setNotes(parsed.notes);
+        if (parsed.terms) setTerms(parsed.terms);
+        if (parsed.items && parsed.items.length > 0) setItems(parsed.items);
+        if (parsed.paidAmount !== undefined) setPaidAmount(parsed.paidAmount);
+        setHasUnsavedDraft(false);
+        setSaveSuccessMsg('Restored auto-saved draft successfully!');
+        setTimeout(() => setSaveSuccessMsg(null), 3500);
+      }
+    } catch (e) {
+      console.warn('Could not restore draft', e);
+    }
+  };
+
+  const handleDiscardDraft = () => {
+    localStorage.removeItem(AUTOSAVE_STORAGE_KEY);
+    setHasUnsavedDraft(false);
+    setDraftInfo(null);
+  };
+
+  // Debounced Auto-Save effect
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    if (!autoSaveEnabled) return;
+
+    const hasMeaningfulContent =
+      customerName.trim().length > 0 ||
+      items.some((i) => i.name.trim().length > 0 || i.unitPrice > 0);
+
+    if (!hasMeaningfulContent) return;
+
+    setIsAutoSaving(true);
+    const timer = setTimeout(() => {
+      try {
+        const draftPayload = {
+          invoiceType,
+          invoiceNumber,
+          date,
+          dueDate,
+          selectedCustomerId,
+          customerName,
+          customerGstin,
+          customerAddress,
+          customerPhone,
+          placeOfSupplyCode,
+          reverseCharge,
+          notes,
+          terms,
+          items,
+          paidAmount,
+          status,
+          targetBusinessId: business.id,
+          savedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        };
+        localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(draftPayload));
+        setLastAutoSavedAt(draftPayload.savedAt);
+      } catch (err) {
+        console.warn('Auto-save write error:', err);
+      } finally {
+        setIsAutoSaving(false);
+      }
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [
+    autoSaveEnabled,
+    customerName,
+    customerGstin,
+    customerAddress,
+    customerPhone,
+    placeOfSupplyCode,
+    invoiceType,
+    invoiceNumber,
+    date,
+    dueDate,
+    reverseCharge,
+    notes,
+    terms,
+    items,
+    paidAmount,
+    status,
+    business.id,
+  ]);
 
   // Quick Customer Creation modal
   const [isAddingCustomerModal, setIsAddingCustomerModal] = useState<boolean>(false);
@@ -364,8 +504,16 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
       };
 
       const saved = await saveInvoice(invoicePayload, existingInvoice?.id);
+      localStorage.removeItem(AUTOSAVE_STORAGE_KEY);
+      setHasUnsavedDraft(false);
+      setLastAutoSavedAt(null);
+
       setStatus(targetStatus);
-      setSaveSuccessMsg(`Invoice #${saved.invoiceNumber} successfully saved as ${targetStatus}!`);
+      setSaveSuccessMsg(
+        existingInvoice
+          ? `Invoice #${saved.invoiceNumber} successfully updated!`
+          : `Invoice #${saved.invoiceNumber} successfully saved as ${targetStatus}!`
+      );
       setTimeout(() => setSaveSuccessMsg(null), 4000);
 
       if (onDone && targetStatus !== 'DRAFT') {
@@ -451,36 +599,87 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
       {/* Top Action Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold text-slate-900">
-              {existingInvoice ? `Edit Invoice: ${existingInvoice.invoiceNumber}` : 'Create New GST Tax Invoice'}
-            </h2>
-            <span
-              className={`text-xs px-2 py-0.5 rounded font-semibold ${
-                status === 'FINALIZED' || status === 'PAID'
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : 'bg-amber-100 text-amber-800'
-              }`}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+        <div className="flex items-center gap-3">
+          {onDone && (
+            <button
+              type="button"
+              onClick={onDone}
+              className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer shrink-0"
+              title="Return to Invoice Register"
             >
-              {status}
-            </span>
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          )}
+
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-lg font-bold text-slate-900">
+                {existingInvoice ? `Edit Invoice: ${existingInvoice.invoiceNumber}` : 'Create New GST Tax Invoice'}
+              </h2>
+              <span
+                className={`text-xs px-2 py-0.5 rounded font-semibold ${
+                  status === 'FINALIZED' || status === 'PAID'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-amber-100 text-amber-800'
+                }`}
+              >
+                {status}
+              </span>
+              {existingInvoice && (
+                <span className="text-[11px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-bold">
+                  Editing Record
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Compliant with Central Goods and Services Tax Rules, 2017
+            </p>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Compliant with Central Goods and Services Tax Rules, 2017
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Real-time Auto-Save Status Badge */}
+          <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs">
+            {isAutoSaving ? (
+              <span className="flex items-center gap-1.5 text-amber-600 font-medium">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Auto-saving...</span>
+              </span>
+            ) : lastAutoSavedAt ? (
+              <span className="flex items-center gap-1.5 text-emerald-600 font-medium">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                <span>Auto-saved at {lastAutoSavedAt}</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-slate-500">
+                <Sparkles className="w-3 h-3 text-indigo-500" />
+                <span>Auto-save active</span>
+              </span>
+            )}
+            <label
+              className="flex items-center gap-1 ml-1 pl-1.5 border-l border-slate-200 cursor-pointer text-slate-500 text-[11px] select-none"
+              title="Toggle automatic draft saving"
+            >
+              <input
+                type="checkbox"
+                checked={autoSaveEnabled}
+                onChange={(e) => setAutoSaveEnabled(e.target.checked)}
+                className="w-3.5 h-3.5 rounded text-indigo-600 cursor-pointer"
+              />
+              <span className="font-semibold text-slate-600">Auto</span>
+            </label>
+          </div>
+
           {/* Save Draft */}
           <button
             onClick={() => handleSave('DRAFT')}
             disabled={isSaving}
             className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+            title="Save as Draft without affecting inventory balances"
           >
             <Save className="w-4 h-4" />
-            <span>Save Draft</span>
+            <span>{existingInvoice ? 'Update Draft' : 'Save Draft'}</span>
           </button>
 
           {/* Preview Modal */}
@@ -512,17 +711,71 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
             <span>Print</span>
           </button>
 
-          {/* Finalize Button */}
+          {/* Finalize / Update Button */}
           <button
             onClick={() => handleSave('FINALIZED')}
             disabled={isSaving}
             className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer"
           >
             <CheckCircle className="w-4 h-4" />
-            <span>Finalize Invoice</span>
+            <span>{existingInvoice ? 'Update Invoice' : 'Finalize Invoice'}</span>
           </button>
         </div>
       </div>
+
+      {/* Editing Mode Banner */}
+      {existingInvoice && (
+        <div className="bg-indigo-50 border border-indigo-200 text-indigo-950 px-4 py-3 rounded-xl text-xs flex items-center justify-between gap-3 shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <Edit3 className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span>
+              <strong>Editing Mode:</strong> You are modifying existing invoice{' '}
+              <strong className="font-mono text-indigo-900">{existingInvoice.invoiceNumber}</strong> (originally dated{' '}
+              {existingInvoice.date}). Click "Update Invoice" to save your edits.
+            </span>
+          </div>
+          {onDone && (
+            <button
+              type="button"
+              onClick={onDone}
+              className="px-2.5 py-1 text-[11px] font-semibold text-indigo-700 bg-white hover:bg-indigo-100 rounded-lg border border-indigo-300 transition-colors cursor-pointer shrink-0"
+            >
+              Exit Edit
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Recoverable Unsaved Auto-Saved Draft Banner */}
+      {hasUnsavedDraft && draftInfo && !existingInvoice && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-950 px-4 py-3 rounded-xl text-xs flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              <strong>Auto-Saved Draft Detected:</strong> Found an unsaved invoice draft from{' '}
+              <span className="font-semibold text-amber-900">{draftInfo.time}</span> for customer{' '}
+              <span className="font-bold text-amber-900">"{draftInfo.customerName}"</span> with {draftInfo.itemCount}{' '}
+              item(s).
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleRestoreDraft}
+              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg cursor-pointer transition-colors shadow-2xs"
+            >
+              Restore Draft
+            </button>
+            <button
+              type="button"
+              onClick={handleDiscardDraft}
+              className="px-2.5 py-1 text-slate-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer transition-colors"
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Notifications */}
       {saveSuccessMsg && (
