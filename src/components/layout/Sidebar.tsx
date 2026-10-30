@@ -18,6 +18,7 @@ import {
   Settings,
   History,
   HelpCircle,
+  HardDrive,
 } from 'lucide-react';
 
 export type NavTab =
@@ -36,8 +37,10 @@ export type NavTab =
   | 'gstr1'
   | 'gstr3b'
   | 'gstr2b'
+  | 'backup-data'
   | 'settings'
-  | 'audit-trail';
+  | 'audit-trail'
+  | 'google-workspace';
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -93,10 +96,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, colla
       ],
     },
     {
+      title: 'GOOGLE WORKSPACE',
+      items: [
+        { id: 'google-workspace' as NavTab, label: 'Drive, Docs & Sheets', icon: FileSpreadsheet, highlight: true },
+      ],
+    },
+    {
       title: 'SYSTEM',
       items: [
+        { id: 'backup-data' as NavTab, label: 'Backup & Restore Data', icon: HardDrive, highlight: true },
         { id: 'settings' as NavTab, label: 'Business & GST Settings', icon: Settings },
-        { id: 'audit-trail' as NavTab, label: 'Audit Trail & Backup', icon: History },
+        { id: 'audit-trail' as NavTab, label: 'Audit Trail', icon: History },
       ],
     },
   ];
@@ -105,15 +115,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, colla
 
   return (
     <aside
-      className={`bg-slate-900 text-slate-300 flex flex-col transition-all duration-300 select-none z-20 ${
+      className={`bg-[#F8F7F4] border-r border-[rgba(17,17,19,0.12)] text-[#111113] flex flex-col shrink-0 transition-all duration-300 select-none z-20 ${
         collapsed ? 'w-16' : 'w-64'
       }`}
     >
-      <div className="flex-1 overflow-y-auto py-3 px-2 space-y-4 scrollbar-thin">
+      {/* Brand Header */}
+      {!collapsed ? (
+        <div className="p-4 sm:p-5 border-b border-[rgba(17,17,19,0.12)]">
+          <div className="font-bold text-xl text-[#111113] tracking-tight leading-none">Zavianoice</div>
+          <div className="label mt-1">GST Billing System</div>
+        </div>
+      ) : (
+        <div className="p-3.5 border-b border-[rgba(17,17,19,0.12)] flex justify-center">
+          <span className="font-bold text-base text-[#111113]">ZV</span>
+        </div>
+      )}
+
+      <div className="flex-1 overflow-y-auto py-3 px-2 space-y-5 scrollbar-thin">
         {sections.map((section, idx) => (
           <div key={idx} className="space-y-1">
             {!collapsed && (
-              <h3 className="px-3 text-[10px] font-bold text-slate-400 tracking-wider uppercase">
+              <h3 className="px-3 label">
                 {section.title}
               </h3>
             )}
@@ -126,16 +148,28 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, colla
                     key={item.id}
                     onClick={() => onSelectTab(item.id)}
                     title={collapsed ? item.label : undefined}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs transition-all cursor-pointer rounded text-left ${
                       isActive
-                        ? 'bg-indigo-600 text-white font-semibold shadow-xs'
+                        ? 'bg-white text-[#111113] font-semibold border border-[rgba(17,17,19,0.12)] shadow-2xs'
                         : item.highlight
-                        ? 'text-indigo-400 hover:bg-slate-800 hover:text-white'
-                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                        ? 'text-[#4f46e5] hover:bg-[#F1EFEA] hover:text-[#111113] font-medium'
+                        : 'text-[#111113]/70 hover:bg-[#F1EFEA] hover:text-[#111113] font-normal'
                     }`}
                   >
-                    <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : item.highlight ? 'text-indigo-400' : 'text-slate-400'}`} />
-                    {!collapsed && <span className="truncate">{item.label}</span>}
+                    <Icon
+                      className={`w-4 h-4 shrink-0 transition-opacity ${
+                        isActive
+                          ? 'text-[#4f46e5]'
+                          : item.highlight
+                          ? 'text-[#4f46e5]'
+                          : 'text-[#111113]/50'
+                      }`}
+                    />
+                    {!collapsed && (
+                      <span className="truncate">
+                        {item.label}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -144,40 +178,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, colla
         ))}
       </div>
 
-      {/* Active Company Badge in Sidebar */}
+      {/* Account block matching Variation 1 */}
       {!collapsed && (
-        <div className="p-2.5 mx-2 mb-2 rounded-xl bg-slate-800/80 border border-slate-700/60 flex items-center justify-between gap-2">
-          <div className="min-w-0 flex items-center gap-2">
-            {business.logoUrl ? (
-              <img src={business.logoUrl} alt="" className="w-6 h-6 object-contain rounded bg-white p-0.5 shrink-0" />
-            ) : (
-              <div className="w-6 h-6 rounded bg-indigo-600/30 text-indigo-400 font-bold text-xs flex items-center justify-center shrink-0">
-                {business.name?.substring(0, 1).toUpperCase()}
-              </div>
-            )}
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-slate-200 truncate">{business.name}</p>
-              <p className="text-[10px] text-slate-400 font-mono truncate">{business.gstin || 'Unregistered'}</p>
-            </div>
+        <div className="p-4 border-t border-[rgba(17,17,19,0.12)] bg-[#F8F7F4]">
+          <div className="flex items-center justify-between">
+            <div className="label">Account</div>
+            <button
+              type="button"
+              onClick={() => onSelectTab('settings')}
+              className="text-[10px] font-medium text-[#4f46e5] hover:underline cursor-pointer"
+            >
+              Settings
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => onSelectTab('settings')}
-            className="text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 hover:underline shrink-0 cursor-pointer"
-          >
-            Manage
-          </button>
-        </div>
-      )}
-
-      {/* Footer helper note */}
-      {!collapsed && (
-        <div className="p-3 bg-slate-950/60 border-t border-slate-800/80 text-[11px] text-slate-400 flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>Indian GST Rule Compliant</span>
+          <div className="mt-1 font-semibold text-xs text-[#111113] truncate">{business.name}</div>
+          <div className="text-[10px] font-mono-code text-[#111113]/50 truncate mt-0.5">
+            {business.gstin || 'Unregistered'}
           </div>
-          <span className="text-[10px] text-slate-500 font-mono">FY 26-27</span>
         </div>
       )}
     </aside>

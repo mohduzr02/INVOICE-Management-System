@@ -52,6 +52,13 @@ service cloud.firestore {
         );
       }
 
+      match /drafts/{draftId} {
+        allow create, update: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+        allow read, delete: if isSignedIn() && (
+          resource.data.ownerUid == request.auth.uid || isBusinessOwner(businessId)
+        );
+      }
+
       match /purchases/{purchaseId} {
         allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
         allow read, update, delete: if isSignedIn() && (

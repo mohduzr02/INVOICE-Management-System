@@ -66,7 +66,7 @@ export const RunLocalModal: React.FC<RunLocalModalProps> = ({ onClose }) => {
       setDeferredPrompt(null);
     } else {
       alert(
-        'To install as a Windows Desktop App:\n1. Look at the right side of your browser URL bar for the "Install" or "App available" icon.\n2. Or click the browser 3 dots menu -> "Apps" -> "Install InvoicePro GST".'
+        'To install as a Windows Desktop App:\n1. Look at the right side of your browser URL bar for the "Install" or "App available" icon.\n2. Or click the browser 3 dots menu -> "Apps" -> "Install Zavianoice".'
       );
     }
   };
@@ -79,10 +79,10 @@ export const RunLocalModal: React.FC<RunLocalModalProps> = ({ onClose }) => {
 
   const handleDownloadBatchScript = () => {
     const batContent = `@echo off
-title InvoicePro GST - Local Desktop Edition
+title Zavianoice - Local Desktop Edition
 color 0b
 echo ===============================================================================
-echo                InvoicePro GST - Indian GST Billing & Accounting
+echo                Zavianoice - Indian GST Billing & Accounting
 echo                        Running on Local Computer
 echo ===============================================================================
 echo.
@@ -115,7 +115,7 @@ npm run dev
   const handleDownloadShScript = () => {
     const shContent = `#!/usr/bin/env bash
 echo "==============================================================================="
-echo "               InvoicePro GST - Running Locally on Your Computer"
+echo "               Zavianoice - Running Locally on Your Computer"
 echo "==============================================================================="
 echo ""
 
@@ -391,7 +391,7 @@ npm run dev
               </span>
             </div>
             <p className="text-slate-600 leading-relaxed text-[11px]">
-              Installs InvoicePro GST as a standalone desktop window on your computer. Adds a shortcut to your <strong>Windows Taskbar</strong> and <strong>Desktop</strong>.
+              Installs Zavianoice as a standalone desktop window on your computer. Adds a shortcut to your <strong>Windows Taskbar</strong> and <strong>Desktop</strong>.
             </p>
             <button
               onClick={handleInstallPwa}

@@ -1,8 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { Invoice } from '../../types';
 import { useBusiness } from '../../context/BusinessContext';
+import { useAuth } from '../../context/AuthContext';
 import { formatINR } from '../../services/gstEngine';
 import { generateInvoicePDF } from '../../services/pdfGenerator';
+import { uploadInvoicePdfToDrive, createInvoiceGoogleDoc } from '../../services/googleWorkspaceService';
 import {
   X,
   FileDown,
@@ -18,7 +20,15 @@ import {
   Sparkles,
   CheckCircle2,
   Edit,
+  HardDrive,
+  FileText,
+  Loader2,
+  Mail,
+  FileSpreadsheet,
+  Send,
+  AtSign,
 } from 'lucide-react';
+import { ExcelShareModal } from '../common/ExcelShareModal';
 
 const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -33,11 +43,20 @@ interface InvoicePreviewModalProps {
 }
 
 export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoice, onClose, onEdit }) => {
-  const { business: defaultBusiness, businesses, customers } = useBusiness();
+  const { business: defaultBusiness, businesses, customers, sendPaymentReminder, logAppAction } = useBusiness();
+  const { getAccessToken, connectWorkspace } = useAuth();
   const business = businesses.find((b) => b.id === invoice.businessId) || defaultBusiness;
 
   const [copied, setCopied] = useState(false);
   const [copyType, setCopyType] = useState<'ORIGINAL' | 'DUPLICATE' | 'TRIPLICATE'>('ORIGINAL');
+
+  // Google Workspace States
+  const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
+  const [isGeneratingDoc, setIsGeneratingDoc] = useState(false);
+  const [workspaceToast, setWorkspaceToast] = useState<{ text: string; url?: string; type: 'success' | 'error' } | null>(null);
+
+  // Excel Modal State
+  const [showExcelModal, setShowExcelModal] = useState(false);
 
   // WhatsApp Share States
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
@@ -55,6 +74,21 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
   const [includeItemsSummary, setIncludeItemsSummary] = useState(true);
   const [copiedWhatsAppMsg, setCopiedWhatsAppMsg] = useState(false);
   const [copiedPublicLink, setCopiedPublicLink] = useState(false);
+
+  // Direct Customer Email Utility States
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState(
+    invoice.customerEmail || matchedCustomer?.email || ''
+  );
+  const [ccEmail, setCcEmail] = useState(business.email || '');
+  const [emailSubject, setEmailSubject] = useState(
+    `Tax Invoice #${invoice.invoiceNumber} from ${business.tradeName || business.name || 'Company'} [₹${Number(invoice.grandTotal || 0).toLocaleString('en-IN')}]`
+  );
+  const [includeEmailItemsSummary, setIncludeEmailItemsSummary] = useState(true);
+  const [includeEmailBankDetails, setIncludeEmailBankDetails] = useState(true);
+  const [includeEmailPublicLink, setIncludeEmailPublicLink] = useState(true);
+  const [copiedEmailBody, setCopiedEmailBody] = useState(false);
+  const [emailRecordedNotice, setEmailRecordedNotice] = useState<string | null>(null);
 
   // Generate public link to invoice
   const publicInvoiceLink = useMemo(() => {
@@ -170,6 +204,140 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
     return `https://api.whatsapp.com/send?text=${encoded}`;
   }, [recipientPhone, generatedWhatsAppMessage]);
 
+  // Generate structured, professional GST Email message
+  const generatedEmailBody = useMemo(() => {
+    const seller = business.tradeName || business.name || 'Our Company';
+    const lines: string[] = [];
+
+    lines.push(`Dear ${invoice.customerName},`);
+    lines.push('');
+    lines.push(`Greetings from ${seller}!`);
+    lines.push('');
+    lines.push(`Please find the summary and remittance details for your GST Tax Invoice #${invoice.invoiceNumber}:`);
+    lines.push('────────────────────────────────────────');
+    lines.push(`• Invoice Number : ${invoice.invoiceNumber}`);
+    lines.push(`• Invoice Date   : ${invoice.date}`);
+    if (invoice.dueDate) {
+      lines.push(`• Due Date       : ${invoice.dueDate}`);
+    }
+    lines.push(`• Total Taxable  : ₹${Number(invoice.totalTaxable || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`);
+    const totalTax =
+      (invoice.cgstTotal || 0) +
+      (invoice.sgstTotal || 0) +
+      (invoice.igstTotal || 0) +
+      (invoice.cessTotal || 0);
+    lines.push(`• Total GST      : ₹${Number(totalTax).toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${invoice.isInterState ? 'IGST' : 'CGST + SGST'})`);
+    if (invoice.manualAdjustment && invoice.manualAdjustment !== 0) {
+      lines.push(`• Adjustment     : ${invoice.manualAdjustment > 0 ? '+' : ''}₹${Number(invoice.manualAdjustment).toLocaleString('en-IN', { minimumFractionDigits: 2 })} (${invoice.adjustmentReason || 'Authorized by ' + (invoice.adjustmentAuthorizedBy || 'Manager')})`);
+    }
+    if (invoice.roundOff !== 0) {
+      lines.push(`• Round Off      : ${invoice.roundOff > 0 ? '+' : ''}₹${Number(invoice.roundOff).toFixed(2)}${invoice.isManualRoundOff ? ' (Manual override)' : ''}`);
+    }
+    lines.push(`• Invoice Total  : ₹${Number(invoice.grandTotal || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`);
+    lines.push(`• Amount Paid    : ₹${Number(invoice.paidAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`);
+    lines.push(`• Balance Due    : ₹${Number(invoice.balanceDue || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`);
+    lines.push(`• Payment Status : ${invoice.status}`);
+    lines.push('────────────────────────────────────────');
+
+    if (includeEmailItemsSummary && invoice.items && invoice.items.length > 0) {
+      lines.push('');
+      lines.push('📦 Itemized Breakdown:');
+      invoice.items.forEach((item, idx) => {
+        lines.push(
+          `${idx + 1}. ${item.name} (${item.quantity} ${item.unit || 'PCS'}) — ₹${Number(item.totalAmount || 0).toFixed(2)} [HSN: ${item.hsnSac || 'N/A'}, GST: ${item.gstRate}%]`
+        );
+      });
+    }
+
+    if (
+      includeEmailBankDetails &&
+      (business.bankName || business.accountNumber || business.upiId)
+    ) {
+      lines.push('');
+      lines.push('🏦 Bank Details for Direct Remittance:');
+      if (business.bankName) lines.push(`• Bank Name   : ${business.bankName}`);
+      if (business.accountNumber) lines.push(`• Account No  : ${business.accountNumber}`);
+      if (business.ifsc) lines.push(`• IFSC Code   : ${business.ifsc}`);
+      if (business.branch) lines.push(`• Branch      : ${business.branch}`);
+      if (business.upiId) lines.push(`• UPI ID      : ${business.upiId}`);
+    }
+
+    if (includeEmailPublicLink) {
+      lines.push('');
+      lines.push('🔗 View & Download Official GST Invoice Online:');
+      lines.push(publicInvoiceLink);
+    }
+
+    lines.push('');
+    lines.push('Please feel free to reach out if you have any questions or require further assistance.');
+    lines.push('');
+    lines.push('Warm regards,');
+    lines.push(seller);
+    if (business.phone) lines.push(`Phone: ${business.phone}`);
+    if (business.email) lines.push(`Email: ${business.email}`);
+    if (business.gstin) lines.push(`GSTIN: ${business.gstin}`);
+
+    return lines.join('\n');
+  }, [
+    invoice,
+    business,
+    includeEmailItemsSummary,
+    includeEmailBankDetails,
+    includeEmailPublicLink,
+    publicInvoiceLink,
+  ]);
+
+  const mailtoUrl = useMemo(() => {
+    const to = encodeURIComponent(recipientEmail.trim());
+    const su = encodeURIComponent(emailSubject);
+    const body = encodeURIComponent(generatedEmailBody);
+    const cc = ccEmail.trim() ? `&cc=${encodeURIComponent(ccEmail.trim())}` : '';
+    return `mailto:${to}?subject=${su}&body=${body}${cc}`;
+  }, [recipientEmail, ccEmail, emailSubject, generatedEmailBody]);
+
+  const gmailWebUrl = useMemo(() => {
+    const to = encodeURIComponent(recipientEmail.trim());
+    const su = encodeURIComponent(emailSubject);
+    const body = encodeURIComponent(generatedEmailBody);
+    const cc = ccEmail.trim() ? `&cc=${encodeURIComponent(ccEmail.trim())}` : '';
+    return `https://mail.google.com/mail/?view=cm&fs=1&to=${to}&su=${su}&body=${body}${cc}`;
+  }, [recipientEmail, ccEmail, emailSubject, generatedEmailBody]);
+
+  const outlookWebUrl = useMemo(() => {
+    const to = encodeURIComponent(recipientEmail.trim());
+    const su = encodeURIComponent(emailSubject);
+    const body = encodeURIComponent(generatedEmailBody);
+    return `https://outlook.live.com/mail/0/deeplink/compose?to=${to}&subject=${su}&body=${body}`;
+  }, [recipientEmail, emailSubject, generatedEmailBody]);
+
+  const handleCopyEmailBody = () => {
+    navigator.clipboard.writeText(generatedEmailBody);
+    setCopiedEmailBody(true);
+    setTimeout(() => setCopiedEmailBody(false), 3000);
+  };
+
+  const handleRecordEmailSent = async () => {
+    try {
+      await sendPaymentReminder({
+        customerId: invoice.customerId || matchedCustomer?.id || 'DIRECT',
+        customerName: invoice.customerName,
+        customerEmail: recipientEmail.trim(),
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        amountDue: invoice.balanceDue,
+        channel: 'EMAIL',
+        subject: emailSubject,
+        message: generatedEmailBody,
+        recipientContact: recipientEmail.trim() || invoice.customerName,
+        status: 'SENT',
+      });
+      setEmailRecordedNotice(`Logged email sent to ${recipientEmail || invoice.customerName} in customer history & audit trail!`);
+      setTimeout(() => setEmailRecordedNotice(null), 4500);
+    } catch (err: any) {
+      console.warn('Could not record email reminder log:', err);
+    }
+  };
+
   const handleShare = () => {
     const text = `Invoice #${invoice.invoiceNumber} for ${invoice.customerName}: Grand Total ${formatINR(
       invoice.grandTotal
@@ -211,17 +379,80 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
   });
   const hsnList = Object.values(hsnGroups);
 
+  // Google Workspace Handlers
+  const handleSaveToDrive = async () => {
+    try {
+      setIsUploadingToDrive(true);
+      setWorkspaceToast(null);
+      let token = await getAccessToken();
+      if (!token) {
+        token = await connectWorkspace();
+      }
+      if (!token) {
+        setWorkspaceToast({ type: 'error', text: 'Google Workspace not connected. Please connect your account.' });
+        return;
+      }
+      const result = await uploadInvoicePdfToDrive(token, invoice, business, copyType);
+      if (result.success && result.url) {
+        setWorkspaceToast({
+          type: 'success',
+          text: `Saved "${result.title}" to Google Drive!`,
+          url: result.url,
+        });
+      } else {
+        setWorkspaceToast({ type: 'error', text: result.error || 'Failed to upload to Google Drive' });
+      }
+    } catch (err: any) {
+      setWorkspaceToast({ type: 'error', text: err.message });
+    } finally {
+      setIsUploadingToDrive(false);
+    }
+  };
+
+  const handleCreateDoc = async () => {
+    try {
+      setIsGeneratingDoc(true);
+      setWorkspaceToast(null);
+      let token = await getAccessToken();
+      if (!token) {
+        token = await connectWorkspace();
+      }
+      if (!token) {
+        setWorkspaceToast({ type: 'error', text: 'Google Workspace not connected. Please connect your account.' });
+        return;
+      }
+      const result = await createInvoiceGoogleDoc(token, invoice, business);
+      if (result.success && result.url) {
+        setWorkspaceToast({
+          type: 'success',
+          text: `Created Google Doc "${result.title}"!`,
+          url: result.url,
+        });
+      } else {
+        setWorkspaceToast({ type: 'error', text: result.error || 'Failed to create Google Doc' });
+      }
+    } catch (err: any) {
+      setWorkspaceToast({ type: 'error', text: err.message });
+    } finally {
+      setIsGeneratingDoc(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full my-6 overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+      <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-4xl w-full h-[95vh] flex flex-col shadow-2xl overflow-hidden">
         {/* Top Control Bar */}
-        <div className="bg-slate-900 text-white px-4 py-3 flex flex-wrap items-center justify-between shrink-0 gap-2">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-sm tracking-tight">GST Tax Invoice</span>
-            <span className="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono">
-              {invoice.invoiceNumber}
+        <div className="bg-slate-950 border-b border-slate-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-300 shrink-0">
+          <div className="flex items-center gap-3">
+            <span className="font-bold text-white tracking-wide flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              {invoice.invoiceNumber || 'DRAFT'}
             </span>
-            <div className="hidden sm:flex items-center gap-1 ml-2 bg-slate-800 rounded-lg p-0.5 text-xs text-slate-300">
+            <span className="text-slate-600 hidden sm:inline">|</span>
+            <span className="text-slate-400 hidden sm:inline">{invoice.customerName}</span>
+
+            {/* Copy Type Badges / Switcher */}
+            <div className="hidden md:flex items-center gap-1 bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-[11px]">
               <button
                 type="button"
                 onClick={() => setCopyType('ORIGINAL')}
@@ -252,7 +483,17 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Direct Email to Customer Button */}
+            <button
+              onClick={() => setShowEmailModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-colors"
+              title="Send GST Invoice directly to customer via Email"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>Email</span>
+            </button>
+
             {/* Share via WhatsApp Button */}
             <button
               onClick={() => setShowWhatsAppModal(true)}
@@ -260,7 +501,47 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
               title="Share invoice summary & public link via WhatsApp"
             >
               <WhatsAppIcon className="w-3.5 h-3.5" />
-              <span>Share via WhatsApp</span>
+              <span>WhatsApp</span>
+            </button>
+
+            {/* Excel Download & Share Button */}
+            <button
+              onClick={() => setShowExcelModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-colors"
+              title="Download & Share invoice in Excel (.xlsx) format"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Excel</span>
+            </button>
+
+            {/* Save to Google Drive Button */}
+            <button
+              onClick={handleSaveToDrive}
+              disabled={isUploadingToDrive}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-colors disabled:opacity-50"
+              title="Upload invoice PDF directly to Google Drive"
+            >
+              {isUploadingToDrive ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <HardDrive className="w-3.5 h-3.5" />
+              )}
+              <span>{isUploadingToDrive ? 'Saving...' : 'Drive'}</span>
+            </button>
+
+            {/* Generate Google Doc Button */}
+            <button
+              onClick={handleCreateDoc}
+              disabled={isGeneratingDoc}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-colors disabled:opacity-50"
+              title="Create an editable Google Doc for this invoice"
+            >
+              {isGeneratingDoc ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <FileText className="w-3.5 h-3.5" />
+              )}
+              <span>{isGeneratingDoc ? 'Creating...' : 'Google Doc'}</span>
             </button>
 
             <button
@@ -269,7 +550,7 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
               title="Download print-ready GST Tax Invoice PDF"
             >
               <FileDown className="w-3.5 h-3.5" />
-              <span>Download PDF</span>
+              <span>PDF</span>
             </button>
 
             <button
@@ -311,6 +592,41 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
             </button>
           </div>
         </div>
+
+        {/* Workspace Toast Notification */}
+        {workspaceToast && (
+          <div
+            className={`px-4 py-2 text-xs flex items-center justify-between shrink-0 ${
+              workspaceToast.type === 'success'
+                ? 'bg-emerald-950 text-emerald-200 border-b border-emerald-800'
+                : 'bg-rose-950 text-rose-200 border-b border-rose-800'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{workspaceToast.text}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              {workspaceToast.url && (
+                <a
+                  href={workspaceToast.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-bold underline text-white hover:text-emerald-300 flex items-center gap-1"
+                >
+                  <span>Open Now</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+              <button
+                onClick={() => setWorkspaceToast(null)}
+                className="text-slate-400 hover:text-white ml-2 font-bold"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Scrollable A4 Sheet Simulation */}
         <div className="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-200/60 flex justify-center">
@@ -392,101 +708,127 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
                 </div>
               </div>
 
-              {/* Invoice Meta Card */}
-              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1.5 text-slate-700 text-xs">
-                <div className="flex justify-between border-b border-slate-200 pb-1">
-                  <span className="font-bold text-slate-900">Invoice No:</span>
-                  <span className="font-mono font-extrabold text-indigo-700">{invoice.invoiceNumber}</span>
+              {/* Invoice Meta Card - INVOICE DETAILS */}
+              <div className="bg-slate-50 rounded-lg border border-slate-300 overflow-hidden text-xs">
+                <div className="bg-slate-900 text-white px-3 py-1.5 flex items-center justify-between">
+                  <span className="font-bold text-[10px] tracking-wider uppercase">INVOICE DETAILS</span>
+                  <span className="font-mono font-bold text-indigo-300 text-[11px]">{invoice.invoiceNumber || 'INV/26-27/1'}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="font-medium text-slate-600">Invoice Date:</span>
-                  <span className="font-medium">{invoice.date}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="font-medium text-slate-600">Payment Due:</span>
-                  <span className="font-medium">{invoice.dueDate}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="font-medium text-slate-600">Place of Supply:</span>
-                  <span className="font-semibold text-slate-800">
-                    {invoice.placeOfSupply} ({invoice.placeOfSupplyCode})
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="font-medium text-slate-600">Reverse Charge:</span>
-                  <span>{invoice.reverseCharge ? 'Yes' : 'No'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="font-medium text-slate-600">Supply Type:</span>
-                  <span className="font-semibold text-indigo-700">
-                    {invoice.isInterState ? 'Inter-State (IGST)' : 'Intra-State (CGST + SGST)'}
-                  </span>
+                <div className="p-3 space-y-1.5 text-slate-700">
+                  <div className="flex justify-between">
+                    <span className="font-medium text-slate-600">Invoice No:</span>
+                    <span className="font-mono font-bold text-slate-900">{invoice.invoiceNumber || 'INV/26-27/1'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-medium text-slate-600">Invoice Date:</span>
+                    <span className="font-medium text-slate-900">{invoice.date || '2026-10-29'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-medium text-slate-600">Place of Supply:</span>
+                    <span className="font-semibold text-slate-800">
+                      {invoice.placeOfSupply || 'Maharashtra'} ({invoice.placeOfSupplyCode || '27'})
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-medium text-slate-600">Supply Type:</span>
+                    <span className="font-bold text-slate-900">
+                      {invoice.isInterState ? 'Inter-State (IGST)' : 'Intra-State (CGST + SGST)'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-medium text-slate-600">Contract No:</span>
+                    <span className="font-medium text-slate-900">{invoice.contractNo || 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-medium text-slate-600">Contract Date:</span>
+                    <span className="font-medium text-slate-900">{invoice.contractDate || 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-medium text-slate-600">Reverse Charge:</span>
+                    <span className="font-bold">{invoice.reverseCharge ? 'YES' : 'NO'}</span>
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* Billed To & Shipped To Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                  Billed To (Buyer / Recipient)
-                </span>
-                <h4 className="font-bold text-slate-900 text-xs">{invoice.customerName}</h4>
-                <p className="text-slate-600 text-[11px] mt-0.5">{invoice.customerAddress || 'Address not specified'}</p>
-                <p className="text-slate-600 text-[11px]">
-                  State: {invoice.placeOfSupply} (Code: {invoice.placeOfSupplyCode})
-                </p>
-                <p className="font-bold text-slate-900 text-[11px] mt-1">
-                  GSTIN / UIN:{' '}
-                  <span className="font-mono font-semibold">
-                    {invoice.customerGstin || 'URP (Unregistered Person)'}
-                  </span>
-                </p>
-                {invoice.customerPhone && (
-                  <p className="text-slate-600 text-[11px]">Phone: {invoice.customerPhone}</p>
-                )}
+              <div className="bg-slate-50/70 rounded-lg border border-slate-300 overflow-hidden text-xs">
+                <div className="bg-slate-900 text-white px-3 py-1.5 font-bold text-[10px] uppercase tracking-wider">
+                  BILLED TO (BUYER / RECIPIENT)
+                </div>
+                <div className="p-3 space-y-1">
+                  <h4 className="font-bold text-slate-900 text-xs">{invoice.customerName}</h4>
+                  <p className="text-slate-600 text-[11px] leading-relaxed">{invoice.customerAddress || 'Address not specified'}</p>
+                  <p className="text-slate-600 text-[11px]">
+                    State: <span className="font-semibold text-slate-800">{invoice.placeOfSupply}</span> (Code: {invoice.placeOfSupplyCode})
+                  </p>
+                  <div className="pt-1.5 border-t border-slate-200 mt-1.5 flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                    <span className="font-bold text-slate-900">
+                      GSTIN / UIN: <span className="font-mono font-semibold text-slate-800">{invoice.customerGstin || 'URP (Unregistered Person)'}</span>
+                    </span>
+                    {invoice.customerPhone && (
+                      <span className="text-slate-600">Phone: {invoice.customerPhone}</span>
+                    )}
+                  </div>
+                </div>
               </div>
 
-              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                  Shipped To (Consignee / Destination)
-                </span>
-                <h4 className="font-bold text-slate-900 text-xs">{invoice.customerName}</h4>
-                <p className="text-slate-600 text-[11px] mt-0.5">
-                  {invoice.customerAddress || `Delivery Destination: ${invoice.placeOfSupply}`}
-                </p>
-                <p className="text-slate-600 text-[11px]">
-                  Place of Delivery: {invoice.placeOfSupply} (Code: {invoice.placeOfSupplyCode})
-                </p>
-                <div className="mt-1 flex items-center gap-1 text-[11px] text-emerald-700">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>GST Compliant Recipient Profile</span>
+              <div className="bg-slate-50/70 rounded-lg border border-slate-300 overflow-hidden text-xs">
+                <div className="bg-slate-900 text-white px-3 py-1.5 font-bold text-[10px] uppercase tracking-wider">
+                  SHIPPED TO (CONSIGNEE / DESTINATION)
+                </div>
+                <div className="p-3 space-y-1">
+                  <h4 className="font-bold text-slate-900 text-xs">
+                    {invoice.shippingName || invoice.customerName}
+                  </h4>
+                  <p className="text-slate-600 text-[11px] leading-relaxed">
+                    {invoice.shippingAddress || invoice.customerAddress || `Delivery Destination: ${invoice.placeOfSupply}`}
+                  </p>
+                  <p className="text-slate-600 text-[11px]">
+                    Destination: <span className="font-semibold text-slate-800">{invoice.shippingState ? `${invoice.shippingState} (Code: ${invoice.shippingStateCode || 'N/A'})` : `${invoice.placeOfSupply} (Code: ${invoice.placeOfSupplyCode})`}</span>
+                  </p>
+                  <div className="pt-1.5 border-t border-slate-200 mt-1.5 flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                    <span className="font-bold text-slate-900">
+                      GSTIN / UIN: <span className="font-mono font-semibold text-slate-800">{invoice.shippingGstin || invoice.customerGstin || 'URP (Unregistered)'}</span>
+                    </span>
+                    {(invoice.shippingPhone || invoice.customerPhone) && (
+                      <span className="text-slate-600">Phone: {invoice.shippingPhone || invoice.customerPhone}</span>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* Line Items Table */}
-            <div className="border border-slate-200 rounded-lg overflow-x-auto">
+            <div className="border border-slate-300 rounded-lg overflow-hidden">
               <table className="w-full text-left border-collapse text-[11px]">
                 <thead>
-                  <tr className="bg-slate-800 text-white font-bold">
-                    <th className="py-2 px-2 text-center w-8">#</th>
-                    <th className="py-2 px-2">Item Description</th>
-                    <th className="py-2 px-2 w-20">HSN/SAC</th>
-                    <th className="py-2 px-2 w-16 text-right">Qty</th>
-                    <th className="py-2 px-2 w-14 text-center">Unit</th>
-                    <th className="py-2 px-2 w-20 text-right">Rate</th>
-                    <th className="py-2 px-2 w-16 text-right">Disc</th>
-                    <th className="py-2 px-2 w-22 text-right">Taxable</th>
-                    <th className="py-2 px-2 w-16 text-center">GST %</th>
-                    <th className="py-2 px-2 w-24 text-right">Total (₹)</th>
+                  <tr className="bg-slate-900 text-white font-bold">
+                    <th className="py-2.5 px-2 text-center w-14">SL No.</th>
+                    <th className="py-2.5 px-2">Item Description</th>
+                    <th className="py-2.5 px-2 w-20">HSN/SAC</th>
+                    <th className="py-2.5 px-2 w-14 text-right">Qty</th>
+                    <th className="py-2.5 px-2 w-12 text-center">Unit</th>
+                    <th className="py-2.5 px-2 w-20 text-right">Rate (₹)</th>
+                    <th className="py-2.5 px-2 w-14 text-right">Disc</th>
+                    <th className="py-2.5 px-2 w-22 text-right">Taxable (₹)</th>
+                    <th className="py-2.5 px-2 w-14 text-center">GST %</th>
+                    <th className="py-2.5 px-2 w-24 text-right">Total (₹)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {invoice.items.map((item, idx) => (
                     <tr key={item.id || idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
                       <td className="py-2 px-2 text-center text-slate-400 font-mono">{idx + 1}</td>
-                      <td className="py-2 px-2 font-medium text-slate-900">{item.name}</td>
+                      <td className="py-2 px-2 font-medium text-slate-900 break-words max-w-[200px] leading-snug">
+                        {item.name}
+                        {(item as any).description && (
+                          <span className="block text-[10px] text-slate-500 italic font-normal mt-0.5">
+                            {(item as any).description}
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2 px-2 font-mono text-slate-600">{item.hsnSac || '-'}</td>
                       <td className="py-2 px-2 text-right font-mono">{item.quantity}</td>
                       <td className="py-2 px-2 text-center font-mono uppercase text-slate-700">
@@ -645,9 +987,25 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
                     </div>
                   )}
 
+                  {invoice.manualAdjustment && invoice.manualAdjustment !== 0 && (
+                    <div className="flex justify-between items-start text-xs bg-purple-50 p-1.5 rounded border border-purple-200 text-purple-900">
+                      <div>
+                        <span className="font-bold">Authority Adjustment:</span>
+                        {invoice.adjustmentAuthorizedBy && (
+                          <span className="text-[10px] text-purple-700 block">
+                            Auth: {invoice.adjustmentAuthorizedBy} {invoice.adjustmentReason ? `(${invoice.adjustmentReason})` : ''}
+                          </span>
+                        )}
+                      </div>
+                      <span className="font-mono font-bold">
+                        {invoice.manualAdjustment > 0 ? '+' : ''}₹ {invoice.manualAdjustment.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+
                   {invoice.roundOff !== 0 && (
                     <div className="flex justify-between text-slate-500 text-[11px]">
-                      <span>Round Off:</span>
+                      <span>Round Off {invoice.isManualRoundOff ? '(Manual)' : ''}:</span>
                       <span className="font-mono">
                         {invoice.roundOff > 0 ? '+' : ''}₹ {invoice.roundOff.toFixed(2)}
                       </span>
@@ -897,6 +1255,262 @@ export const InvoicePreviewModal: React.FC<InvoicePreviewModalProps> = ({ invoic
               </div>
             </div>
           </div>
+        )}
+
+        {/* Direct Email Sending Utility Modal */}
+        {showEmailModal && (
+          <div className="fixed inset-0 z-60 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+              {/* Header */}
+              <div className="bg-blue-600 px-5 py-4 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-blue-700/60 rounded-xl">
+                    <Mail className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base leading-tight">Send Invoice Directly to Customer</h3>
+                    <p className="text-xs text-blue-100">
+                      Email tax invoice details, bank remittance info & PDF link to {invoice.customerName}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowEmailModal(false)}
+                  className="p-1.5 rounded-lg text-blue-100 hover:text-white hover:bg-blue-700/60 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Status Notice Toast */}
+              {emailRecordedNotice && (
+                <div className="bg-emerald-50 border-b border-emerald-200 px-4 py-2.5 flex items-center justify-between text-xs font-semibold text-emerald-800">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>{emailRecordedNotice}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEmailRecordedNotice(null)}
+                    className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* Body */}
+              <div className="p-5 space-y-4 overflow-y-auto">
+                {/* Email Inputs Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">
+                      Customer Email Address <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                        <AtSign className="w-4 h-4" />
+                      </div>
+                      <input
+                        type="email"
+                        value={recipientEmail}
+                        onChange={(e) => setRecipientEmail(e.target.value)}
+                        placeholder="customer@example.com"
+                        className="w-full pl-9 pr-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">
+                      CC (Optional)
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                        <AtSign className="w-4 h-4" />
+                      </div>
+                      <input
+                        type="email"
+                        value={ccEmail}
+                        onChange={(e) => setCcEmail(e.target.value)}
+                        placeholder="accounts@yourcompany.com"
+                        className="w-full pl-9 pr-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Subject Line */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">
+                    Email Subject
+                  </label>
+                  <input
+                    type="text"
+                    value={emailSubject}
+                    onChange={(e) => setEmailSubject(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-medium text-slate-800"
+                  />
+                </div>
+
+                {/* Content Options */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2 text-xs text-slate-700">
+                  <p className="font-bold text-slate-900 text-xs uppercase tracking-wide">
+                    Include in Email Content:
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={includeEmailPublicLink}
+                        onChange={(e) => setIncludeEmailPublicLink(e.target.checked)}
+                        className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                      />
+                      <span className="font-medium text-[11px]">Online Invoice Link</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={includeEmailBankDetails}
+                        onChange={(e) => setIncludeEmailBankDetails(e.target.checked)}
+                        className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                      />
+                      <span className="font-medium text-[11px]">Bank & UPI Credentials</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={includeEmailItemsSummary}
+                        onChange={(e) => setIncludeEmailItemsSummary(e.target.checked)}
+                        className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                      />
+                      <span className="font-medium text-[11px]">Itemized Items List</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Email Body Preview */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                      Email Body Preview
+                    </label>
+                    <span className="text-[11px] text-slate-400">Personalized with Seller & GST Summary</span>
+                  </div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 max-h-48 overflow-y-auto text-xs font-mono whitespace-pre-wrap text-slate-800 leading-relaxed shadow-inner">
+                    {generatedEmailBody}
+                  </div>
+                </div>
+
+                {/* Fast Action Buttons row */}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-blue-50/50 p-2.5 rounded-xl border border-blue-100 text-xs">
+                  <div className="flex items-center gap-1.5 text-blue-900 font-semibold text-[11px]">
+                    <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Quick Attach:</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => generateInvoicePDF(invoice, business, 'download', copyType)}
+                      className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-blue-200 rounded text-blue-700 font-semibold cursor-pointer flex items-center gap-1 text-[11px]"
+                      title="Download PDF to easily drag-and-drop as attachment"
+                    >
+                      <FileDown className="w-3 h-3 text-blue-600" />
+                      <span>Download PDF Attachment</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyEmailBody}
+                      className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-blue-200 rounded text-blue-700 font-semibold cursor-pointer flex items-center gap-1 text-[11px]"
+                    >
+                      {copiedEmailBody ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-600" />
+                          <span className="text-emerald-700">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3 text-blue-600" />
+                          <span>Copy Message Text</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleRecordEmailSent}
+                      className="px-2.5 py-1 bg-blue-100 hover:bg-blue-200 border border-blue-300 rounded text-blue-900 font-bold cursor-pointer flex items-center gap-1 text-[11px]"
+                      title="Log this email in the customer's interaction audit trail"
+                    >
+                      <CheckCircle2 className="w-3 h-3 text-blue-700" />
+                      <span>Save to Customer History</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer Actions */}
+              <div className="bg-slate-50 px-5 py-3.5 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowEmailModal(false)}
+                  className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:text-slate-800 rounded-lg hover:bg-slate-200/60 cursor-pointer transition-colors"
+                >
+                  Close
+                </button>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Open in Gmail Web */}
+                  <a
+                    href={gmailWebUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => handleRecordEmailSent()}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-2xs"
+                    title="Compose and send directly in Gmail Web"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Open in Gmail</span>
+                  </a>
+
+                  {/* Open in Outlook Web */}
+                  <a
+                    href={outlookWebUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => handleRecordEmailSent()}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-2xs"
+                    title="Compose and send in Outlook Web"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Open in Outlook</span>
+                  </a>
+
+                  {/* Send via Default Native Email App */}
+                  <a
+                    href={mailtoUrl}
+                    onClick={() => handleRecordEmailSent()}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors shadow-sm"
+                    title="Launch native email client (Outlook desktop, Apple Mail, etc.)"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send via Email App</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Excel Share & Download Modal */}
+        {showExcelModal && (
+          <ExcelShareModal
+            invoice={invoice}
+            business={business}
+            onClose={() => setShowExcelModal(false)}
+          />
         )}
       </div>
     </div>

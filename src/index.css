@@ -1,1 +1,106 @@
 @import "tailwindcss";
+
+:root {
+  --bg: #F8F7F4;
+  --ink: #111113;
+  --accent: #4f46e5;
+  --ink-faint: rgba(17, 17, 19, 0.12);
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+.label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink);
+  opacity: 0.55;
+  font-weight: 500;
+}
+
+.font-mono-code {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.card-v1 {
+  background: #ffffff;
+  border: 1px solid var(--ink-faint);
+  border-radius: 4px;
+}
+
+.btn-primary-v1 {
+  background: var(--ink);
+  color: #ffffff;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.55rem 1.25rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.btn-primary-v1:hover {
+  background: #232328;
+  border-color: #232328;
+}
+
+.btn-secondary-v1 {
+  background: #ffffff;
+  color: var(--ink);
+  border: 1px solid var(--ink-faint);
+  border-radius: 4px;
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.55rem 1.15rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.btn-secondary-v1:hover {
+  background: #F1EFEA;
+  border-color: rgba(17, 17, 19, 0.25);
+}
+
+/* Custom crisp scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(17, 17, 19, 0.16);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(17, 17, 19, 0.3);
+}

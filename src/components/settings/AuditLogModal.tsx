@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { useBusiness } from '../../context/BusinessContext';
 import {
   History,
@@ -8,50 +8,77 @@ import {
   FileCode,
   Calendar,
   User,
+  Upload,
+  Database,
+  CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react';
 
 export const AuditLogModal: React.FC = () => {
   const {
     auditLogs,
     clearAllSampleData,
-    clearAllData,
     business,
-    customers,
-    suppliers,
-    products,
-    invoices,
-    purchases,
-    payments,
-    expenses,
-    creditNotes,
-    quotations,
+    exportBackupJSON,
+    importBackupJSON,
+    validateBackupJSON,
   } = useBusiness();
-  const [actionNotice, setActionNotice] = React.useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Export full JSON database backup
   const handleExportJsonBackup = () => {
-    const backupData = {
-      backupTimestamp: new Date().toISOString(),
-      business,
-      customers,
-      suppliers,
-      products,
-      invoices,
-      purchases,
-      payments,
-      expenses,
-      creditNotes,
-      quotations,
-      auditLogs,
-    };
+    try {
+      const res = exportBackupJSON();
+      setActionNotice(`Backup successfully exported: ${res.filename} (${res.stats.invoicesCount} invoices, ${res.stats.customersCount} customers).`);
+      setTimeout(() => setActionNotice(null), 5000);
+    } catch (err: any) {
+      setErrorMessage(`Export failed: ${err?.message || 'Unknown error'}`);
+      setTimeout(() => setErrorMessage(null), 5000);
+    }
+  };
 
-    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `InvoicePro_Backup_${(business.name || 'Business').replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  // Restore database from selected JSON backup file
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.json')) {
+      setErrorMessage('Please upload a valid .json database backup file.');
+      setTimeout(() => setErrorMessage(null), 5000);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const validation = validateBackupJSON(text);
+        if (!validation.valid || !validation.raw) {
+          setErrorMessage(validation.error || 'The uploaded file is not a valid Zavianoice backup.');
+          setTimeout(() => setErrorMessage(null), 5000);
+          return;
+        }
+
+        const confirmMsg = `Restore database from "${file.name}"?\n\nRecords found:\n• ${validation.stats?.invoicesCount || 0} Invoices\n• ${validation.stats?.customersCount || 0} Customers\n• ${validation.stats?.productsCount || 0} Products\n\nClick OK to merge and restore into your business database.`;
+        if (window.confirm(confirmMsg)) {
+          const res = await importBackupJSON(validation.raw, 'merge');
+          if (res.success) {
+            setActionNotice(res.message || 'Database restored successfully!');
+            setTimeout(() => setActionNotice(null), 5000);
+          } else {
+            setErrorMessage(res.message || 'Restore could not be completed.');
+            setTimeout(() => setErrorMessage(null), 5000);
+          }
+        }
+      } catch (err: any) {
+        setErrorMessage(`Failed to read file: ${err?.message || 'Error'}`);
+        setTimeout(() => setErrorMessage(null), 5000);
+      }
+    };
+    reader.readAsText(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleClearSampleData = async () => {
@@ -75,12 +102,28 @@ export const AuditLogModal: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={handleFileChange}
+          />
           <button
             onClick={handleExportJsonBackup}
-            className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer"
+            className="btn-primary-v1 text-xs py-2 px-3 flex items-center gap-1.5 cursor-pointer shadow-xs"
+            title="Export full business database to a local JSON file"
           >
             <Download className="w-4 h-4" />
-            <span>Export JSON Full Backup</span>
+            <span>Backup Data</span>
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="btn-secondary-v1 text-xs py-2 px-3 flex items-center gap-1.5 cursor-pointer"
+            title="Import and restore from a JSON backup file"
+          >
+            <Upload className="w-4 h-4 text-[#4f46e5]" />
+            <span>Restore Data</span>
           </button>
           <button
             onClick={handleClearSampleData}
@@ -93,8 +136,16 @@ export const AuditLogModal: React.FC = () => {
       </div>
 
       {actionNotice && (
-        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-lg font-medium">
-          {actionNotice}
+        <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-lg font-medium flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{actionNotice}</span>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-lg font-medium flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+          <span>{errorMessage}</span>
         </div>
       )}
 

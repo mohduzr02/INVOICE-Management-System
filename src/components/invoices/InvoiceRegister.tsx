@@ -1,9 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { useBusiness } from '../../context/BusinessContext';
+import { useAuth } from '../../context/AuthContext';
 import { Invoice, InvoiceStatus, InvoiceType, INDIAN_STATES } from '../../types';
 import { formatINR } from '../../services/gstEngine';
 import { generateInvoicePDF, generateConsolidatedInvoicesPDF } from '../../services/pdfGenerator';
-import { exportSalesRegisterToExcel } from '../../services/excelExporter';
+import { exportSalesRegisterToExcel, exportSalesRegisterToCSV } from '../../services/excelExporter';
+import { exportInvoicesToGoogleSheets, uploadConsolidatedInvoicesToDrive } from '../../services/googleWorkspaceService';
+import { ExcelShareModal } from '../common/ExcelShareModal';
+import { TableExportDropdown } from '../common/TableExportDropdown';
 import {
   Search,
   Filter,
@@ -42,6 +46,7 @@ import {
   ShieldAlert,
   Phone,
   Check,
+  HardDrive,
 } from 'lucide-react';
 
 const WhatsAppIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
@@ -146,7 +151,13 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
   onEditInvoice,
   onPreviewInvoice,
 }) => {
-  const { business, businesses, invoices, customers, cancelInvoice, deleteInvoice, recordPayment, saveInvoice } = useBusiness();
+  const { business, businesses, invoices, customers, cancelInvoice, deleteInvoice, recordPayment, saveInvoice, logAppAction } = useBusiness();
+  const { getAccessToken, connectWorkspace } = useAuth();
+
+  // Google Workspace States
+  const [isExportingSheets, setIsExportingSheets] = useState(false);
+  const [isBackingUpDrive, setIsBackingUpDrive] = useState(false);
+  const [workspaceToast, setWorkspaceToast] = useState<{ text: string; url?: string; type: 'success' | 'error' } | null>(null);
 
   // Search
   const [searchTerm, setSearchTerm] = useState('');
@@ -194,6 +205,7 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
   const [bulkCopyType, setBulkCopyType] = useState<'ORIGINAL' | 'DUPLICATE' | 'TRIPLICATE'>('ORIGINAL');
   const [isBulkExporting, setIsBulkExporting] = useState(false);
   const [bulkExportSuccess, setBulkExportSuccess] = useState<string | null>(null);
+  const [excelModalInvoice, setExcelModalInvoice] = useState<Invoice | null>(null);
 
   // Automated Payment Reminder System States
   const todayYMD = useMemo(() => new Date().toISOString().split('T')[0], []);
@@ -204,7 +216,7 @@ export const InvoiceRegister: React.FC<InvoiceRegisterProps> = ({
 
   const getOverdueDays = (inv: Invoice) => {
     if (!checkIsOverdue(inv)) return 0;
-    const diffTime = Math.abs(new Date(todayYMD).getTime() - new Date(inv.dueDate).getTime());
+    const diffTime = Math.abs(new Date(todayYMD).getTime() - new Date(inv.dueDate || inv.date).getTime());
     return Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
   };
 
@@ -699,6 +711,92 @@ Warm regards,
     }
   };
 
+  // Table Export Handlers (Excel and CSV)
+  const handleExportExcel = () => {
+    const target = selectedInvoiceIds.length > 0 ? selectedInvoices : filteredInvoices;
+    if (target.length === 0) return;
+    const cleanBiz = (business.name || 'Business').replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `Sales_Register_${cleanBiz}_${new Date().toISOString().split('T')[0]}.xlsx`;
+    exportSalesRegisterToExcel(target, fileName);
+    logAppAction(
+      'Export Invoices',
+      'EXPORT',
+      `Exported ${target.length} invoices to Excel (${fileName})`,
+      { status: 'success' }
+    );
+  };
+
+  const handleExportCSV = () => {
+    const target = selectedInvoiceIds.length > 0 ? selectedInvoices : filteredInvoices;
+    if (target.length === 0) return;
+    const cleanBiz = (business.name || 'Business').replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `Sales_Register_${cleanBiz}_${new Date().toISOString().split('T')[0]}.csv`;
+    exportSalesRegisterToCSV(target, fileName);
+    logAppAction(
+      'Export Invoices',
+      'EXPORT',
+      `Exported ${target.length} invoices to CSV (${fileName})`,
+      { status: 'success' }
+    );
+  };
+
+  // Google Workspace Handlers
+  const handleExportToSheets = async (targetInvoices: Invoice[]) => {
+    if (targetInvoices.length === 0) return;
+    setIsExportingSheets(true);
+    setWorkspaceToast(null);
+    try {
+      let token = await getAccessToken();
+      if (!token) token = await connectWorkspace();
+      if (!token) {
+        setWorkspaceToast({ type: 'error', text: 'Google Workspace not connected. Please authenticate.' });
+        return;
+      }
+      const res = await exportInvoicesToGoogleSheets(token, targetInvoices, business);
+      if (res.success && res.url) {
+        setWorkspaceToast({
+          type: 'success',
+          text: `Exported ${targetInvoices.length} invoices to Google Sheets!`,
+          url: res.url,
+        });
+      } else {
+        setWorkspaceToast({ type: 'error', text: res.error || 'Failed to export to Google Sheets' });
+      }
+    } catch (err: any) {
+      setWorkspaceToast({ type: 'error', text: err.message });
+    } finally {
+      setIsExportingSheets(false);
+    }
+  };
+
+  const handleBackupToDrive = async (targetInvoices: Invoice[]) => {
+    if (targetInvoices.length === 0) return;
+    setIsBackingUpDrive(true);
+    setWorkspaceToast(null);
+    try {
+      let token = await getAccessToken();
+      if (!token) token = await connectWorkspace();
+      if (!token) {
+        setWorkspaceToast({ type: 'error', text: 'Google Workspace not connected. Please authenticate.' });
+        return;
+      }
+      const res = await uploadConsolidatedInvoicesToDrive(token, targetInvoices, businesses);
+      if (res.success && res.url) {
+        setWorkspaceToast({
+          type: 'success',
+          text: `Uploaded consolidated PDF (${targetInvoices.length} invoices) to Google Drive!`,
+          url: res.url,
+        });
+      } else {
+        setWorkspaceToast({ type: 'error', text: res.error || 'Failed to backup to Google Drive' });
+      }
+    } catch (err: any) {
+      setWorkspaceToast({ type: 'error', text: err.message });
+    } finally {
+      setIsBackingUpDrive(false);
+    }
+  };
+
   // Duplicate Invoice
   const handleDuplicate = async (invoice: Invoice) => {
     const nextNum = business.nextInvoiceNumber || 101;
@@ -792,13 +890,43 @@ Warm regards,
             </span>
           </button>
 
+          <TableExportDropdown
+            label={selectedInvoiceIds.length > 0 ? 'Export Selected' : 'Export'}
+            count={selectedInvoiceIds.length > 0 ? selectedInvoiceIds.length : filteredInvoices.length}
+            onExportExcel={handleExportExcel}
+            onExportCSV={handleExportCSV}
+            disabled={filteredInvoices.length === 0}
+            variant="emerald"
+          />
+
+          {/* Export to Google Sheets */}
           <button
-            onClick={() => exportSalesRegisterToExcel(filteredInvoices)}
-            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold rounded-lg border border-emerald-200 transition-colors cursor-pointer"
-            title="Download filtered records as Excel (.xlsx)"
+            onClick={() => handleExportToSheets(selectedInvoiceIds.length > 0 ? selectedInvoices : filteredInvoices)}
+            disabled={isExportingSheets || filteredInvoices.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold rounded-lg border border-emerald-300 transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
+            title="Export invoices directly to a styled Google Sheets spreadsheet"
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-            <span>Export Excel ({filteredInvoices.length})</span>
+            {isExportingSheets ? (
+              <Loader2 className="w-4 h-4 text-emerald-600 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            )}
+            <span>Google Sheets</span>
+          </button>
+
+          {/* Backup to Google Drive */}
+          <button
+            onClick={() => handleBackupToDrive(selectedInvoiceIds.length > 0 ? selectedInvoices : filteredInvoices)}
+            disabled={isBackingUpDrive || filteredInvoices.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-800 text-xs font-semibold rounded-lg border border-blue-300 transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
+            title="Upload consolidated invoice PDF to Google Drive"
+          >
+            {isBackingUpDrive ? (
+              <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+            ) : (
+              <HardDrive className="w-4 h-4 text-blue-600" />
+            )}
+            <span>Save to Drive</span>
           </button>
 
           <button
@@ -810,6 +938,41 @@ Warm regards,
           </button>
         </div>
       </div>
+
+      {/* Workspace Toast Notification */}
+      {workspaceToast && (
+        <div
+          className={`p-3 rounded-xl border flex items-center justify-between text-xs font-medium animate-in fade-in duration-200 ${
+            workspaceToast.type === 'success'
+              ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+              : 'bg-rose-50 text-rose-900 border-rose-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{workspaceToast.text}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            {workspaceToast.url && (
+              <a
+                href={workspaceToast.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-bold underline hover:opacity-80 flex items-center gap-1 text-emerald-800"
+              >
+                <span>Open in Google Workspace</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+            <button
+              onClick={() => setWorkspaceToast(null)}
+              className="text-slate-400 hover:text-slate-600 ml-2 font-bold"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Automated Overdue Payment Alert Banner */}
       {overdueInvoices.length > 0 && (
@@ -1426,6 +1589,38 @@ Warm regards,
               </button>
             )}
 
+            {/* Export Selected to Google Sheets */}
+            <button
+              type="button"
+              disabled={isExportingSheets}
+              onClick={() => handleExportToSheets(selectedInvoices)}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+              title="Export selected invoices to a styled Google Sheets spreadsheet"
+            >
+              {isExportingSheets ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="w-4 h-4" />
+              )}
+              <span>Export to Sheets ({selectedInvoiceIds.length})</span>
+            </button>
+
+            {/* Save Selected to Google Drive */}
+            <button
+              type="button"
+              disabled={isBackingUpDrive}
+              onClick={() => handleBackupToDrive(selectedInvoices)}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+              title="Upload selected invoices as consolidated PDF to Google Drive"
+            >
+              {isBackingUpDrive ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <HardDrive className="w-4 h-4" />
+              )}
+              <span>Save to Drive ({selectedInvoiceIds.length})</span>
+            </button>
+
             {/* Print Consolidated */}
             <button
               type="button"
@@ -1556,7 +1751,15 @@ Warm regards,
                         ₹ {totalTax.toFixed(2)}
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-bold text-slate-900">
-                        {formatINR(inv.grandTotal)}
+                        <div>{formatINR(inv.grandTotal)}</div>
+                        {inv.manualAdjustment && inv.manualAdjustment !== 0 && (
+                          <span
+                            className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-1 py-0.2 rounded mt-0.5"
+                            title={`Authority Adjustment: ${inv.manualAdjustment > 0 ? '+' : ''}₹${inv.manualAdjustment} (Authorized by: ${inv.adjustmentAuthorizedBy || 'Admin'}${inv.adjustmentReason ? ` - ${inv.adjustmentReason}` : ''})`}
+                          >
+                            Adj: {inv.manualAdjustment > 0 ? '+' : ''}₹{inv.manualAdjustment}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-semibold">
                         <span className={inv.balanceDue > 0 ? 'text-amber-700 font-bold' : 'text-emerald-700'}>
@@ -1611,6 +1814,15 @@ Warm regards,
                             title="Download PDF"
                           >
                             <FileDown className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Excel Share & Download */}
+                          <button
+                            onClick={() => setExcelModalInvoice(inv)}
+                            className="p-1 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded transition-colors cursor-pointer"
+                            title="Share & Download Excel (.xlsx)"
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
                           </button>
 
                           {/* Print */}
@@ -2137,6 +2349,14 @@ Warm regards,
             </div>
           </div>
         </div>
+      )}
+
+      {excelModalInvoice && (
+        <ExcelShareModal
+          invoice={excelModalInvoice}
+          business={businesses.find((b) => b.id === excelModalInvoice.businessId) || business}
+          onClose={() => setExcelModalInvoice(null)}
+        />
       )}
     </div>
   );

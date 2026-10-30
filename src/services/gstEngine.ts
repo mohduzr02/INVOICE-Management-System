@@ -136,15 +136,25 @@ export interface InvoiceTotals {
   sgstTotal: number;
   igstTotal: number;
   cessTotal: number;
+  unadjustedGrand: number;
+  manualAdjustment: number;
   roundOff: number;
+  isManualRoundOff: boolean;
   grandTotal: number;
   amountInWords: string;
 }
 
 /**
- * Calculates aggregated invoice totals from line items
+ * Calculates aggregated invoice totals from line items, with authority adjustment and round-off override
  */
-export function calculateInvoiceTotals(items: LineItem[]): InvoiceTotals {
+export function calculateInvoiceTotals(
+  items: LineItem[],
+  options?: {
+    manualAdjustment?: number;
+    customRoundOff?: number;
+    isManualRoundOff?: boolean;
+  }
+): InvoiceTotals {
   let subTotal = 0;
   let discountTotal = 0;
   let totalTaxable = 0;
@@ -172,10 +182,23 @@ export function calculateInvoiceTotals(items: LineItem[]): InvoiceTotals {
     cessTotal = safeAdd(cessTotal, item.cessAmount || 0);
   }
 
-  const unroundedGrand = round2(totalTaxable + cgstTotal + sgstTotal + igstTotal + cessTotal);
-  const roundedGrand = Math.round(unroundedGrand);
-  const roundOff = round2(roundedGrand - unroundedGrand);
-  const grandTotal = roundedGrand;
+  const unadjustedGrand = round2(totalTaxable + cgstTotal + sgstTotal + igstTotal + cessTotal);
+  const manualAdjustment = Number(options?.manualAdjustment || 0);
+  const afterAdjustment = round2(unadjustedGrand + manualAdjustment);
+
+  let roundOff = 0;
+  let grandTotal = 0;
+  const isManual = !!options?.isManualRoundOff;
+
+  if (isManual) {
+    roundOff = round2(Number(options?.customRoundOff || 0));
+    grandTotal = round2(afterAdjustment + roundOff);
+  } else {
+    const roundedGrand = Math.round(afterAdjustment);
+    roundOff = round2(roundedGrand - afterAdjustment);
+    grandTotal = roundedGrand;
+  }
+
   const amountInWords = numberToIndianWords(grandTotal);
 
   return {
@@ -186,7 +209,10 @@ export function calculateInvoiceTotals(items: LineItem[]): InvoiceTotals {
     sgstTotal,
     igstTotal,
     cessTotal,
+    unadjustedGrand,
+    manualAdjustment,
     roundOff,
+    isManualRoundOff: isManual,
     grandTotal,
     amountInWords,
   };

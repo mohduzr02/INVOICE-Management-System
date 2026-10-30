@@ -202,7 +202,7 @@ export interface Invoice {
   invoiceType: InvoiceType;
   status: InvoiceStatus;
   date: string;
-  dueDate: string;
+  dueDate?: string;
   customerId: string;
   customerName: string;
   customerGstin?: string;
@@ -212,6 +212,14 @@ export interface Invoice {
   placeOfSupplyCode: string;
   isInterState: boolean;
   reverseCharge: boolean;
+  contractNo?: string;
+  contractDate?: string;
+  shippingName?: string;
+  shippingGstin?: string;
+  shippingAddress?: string;
+  shippingState?: string;
+  shippingStateCode?: string;
+  shippingPhone?: string;
   items: LineItem[];
   subTotal: number;
   discountTotal: number;
@@ -221,6 +229,11 @@ export interface Invoice {
   igstTotal: number;
   cessTotal: number;
   roundOff: number;
+  isManualRoundOff?: boolean;
+  manualAdjustment?: number;
+  adjustmentReason?: string;
+  adjustmentAuthorizedBy?: string;
+  customerEmail?: string;
   grandTotal: number;
   amountInWords: string;
   paidAmount: number;
@@ -229,6 +242,57 @@ export interface Invoice {
   terms: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PaymentReminderRecord {
+  id: string;
+  businessId: string;
+  customerId: string;
+  customerName: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  recipientContact?: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  amountDue: number;
+  channel: 'EMAIL' | 'WHATSAPP' | 'SMS';
+  subject?: string;
+  message: string;
+  sentAt: string;
+  status: 'SENT' | 'SCHEDULED' | 'FAILED' | 'CANCELLED';
+  scheduledDate?: string;
+  sentBy?: string;
+}
+
+export interface ScheduledReminderConfig {
+  id: string;
+  businessId: string;
+  customerId: string;
+  customerName: string;
+  customerEmail: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  amountDue: number;
+  scheduleType: 'ON_DUE_DATE' | 'BEFORE_DUE_DATE' | 'AFTER_OVERDUE' | 'CUSTOM_DATE' | 'WEEKLY_RECURRING';
+  scheduledDate: string; // YYYY-MM-DD
+  frequencyDays?: number;
+  status: 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'CANCELLED';
+  emailSubject: string;
+  emailTemplate: string;
+  lastRunAt?: string;
+  nextRunDate: string;
+  createdAt: string;
+}
+
+export interface AppActionLog {
+  id: string;
+  action: string;
+  category: 'INVOICE' | 'CUSTOMER' | 'PAYMENT' | 'EXPORT' | 'REMINDER' | 'SETTINGS' | 'AUTOSAVE' | 'BACKUP' | 'SYSTEM';
+  entityId?: string;
+  entityNumber?: string;
+  details: string;
+  timestamp: string;
+  status?: 'success' | 'warning' | 'info';
 }
 
 export interface Purchase {

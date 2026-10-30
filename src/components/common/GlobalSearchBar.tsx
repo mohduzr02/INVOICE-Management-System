@@ -245,10 +245,10 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
     searchResults.invoices.length + searchResults.customers.length + searchResults.products.length;
 
   return (
-    <div ref={containerRef} className="relative flex-1 max-w-sm sm:max-w-md md:max-w-lg mx-1 sm:mx-3">
+    <div ref={containerRef} className="relative flex-1 min-w-[100px] sm:min-w-[130px] max-w-xs sm:max-w-sm md:max-w-md mx-1 sm:mx-2">
       {/* Search Bar Input */}
       <div className="relative group">
-        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none group-focus-within:text-indigo-600 transition-colors" />
+        <Search className="w-4 h-4 text-slate-400 absolute left-2.5 sm:left-3 top-1/2 -translate-y-1/2 pointer-events-none group-focus-within:text-indigo-600 transition-colors" />
         <input
           ref={inputRef}
           type="text"
@@ -259,8 +259,8 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
           }}
           onFocus={() => setIsOpen(true)}
           onKeyDown={handleKeyDown}
-          placeholder="Search invoices, customers, products by ID or name..."
-          className="w-full bg-slate-100/90 hover:bg-slate-100 focus:bg-white text-xs sm:text-sm text-slate-900 placeholder-slate-400 pl-9 pr-14 py-2 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all shadow-2xs outline-hidden"
+          placeholder="Search invoices, parties, items..."
+          className="w-full bg-slate-100/90 hover:bg-slate-100 focus:bg-white text-xs sm:text-sm text-slate-900 placeholder-slate-400 pl-8 sm:pl-9 pr-8 sm:pr-14 py-1.5 sm:py-2 rounded-xl border border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all shadow-2xs outline-hidden"
         />
 
         {query ? (
@@ -270,7 +270,7 @@ export const GlobalSearchBar: React.FC<GlobalSearchBarProps> = ({
               setQuery('');
               inputRef.current?.focus();
             }}
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-md cursor-pointer hover:bg-slate-200 transition-colors"
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-md cursor-pointer hover:bg-slate-200 transition-colors"
             title="Clear search"
           >
             <X className="w-3.5 h-3.5" />

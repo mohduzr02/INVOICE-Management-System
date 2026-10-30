@@ -9,10 +9,15 @@ import {
   CreditCard,
   Building,
   PlusCircle,
+  Plus,
   ArrowUpRight,
   ShieldAlert,
   ArrowRight,
   Receipt,
+  HardDrive,
+  Download,
+  Upload,
+  CheckCircle2,
 } from 'lucide-react';
 import { NavTab } from '../layout/Sidebar';
 import { FinancialTrendsSection } from './FinancialTrendsSection';
@@ -33,7 +38,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onOpenInvoice 
     expenses,
     hasSampleData,
     clearAllSampleData,
+    lastBackupTimestamp,
+    exportBackupJSON,
   } = useBusiness();
+
+  const [backupSuccessNotice, setBackupSuccessNotice] = React.useState<string | null>(null);
+
+  const handleQuickBackup = () => {
+    try {
+      const res = exportBackupJSON();
+      setBackupSuccessNotice(`Database backup exported: ${res.filename}`);
+      setTimeout(() => setBackupSuccessNotice(null), 4000);
+    } catch (err: any) {
+      alert(`Backup failed: ${err?.message || 'Error'}`);
+    }
+  };
 
   // Real data calculations
   const activeInvoices = invoices.filter((i) => i.status !== 'CANCELLED');
@@ -89,121 +108,169 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onOpenInvoice 
         </div>
       )}
 
-      {/* Top Banner / Welcome */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-6 text-white shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 border border-slate-800">
+      {/* Header Section - Variation 1 */}
+      <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-4 border-b border-[rgba(17,17,19,0.12)]">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-[#111113] m-0" style={{ letterSpacing: '-0.03em' }}>
+            Overview
+          </h1>
+          <p className="text-sm text-[#111113]/60 mt-1">
+            Managing your Indian GST compliance.
+          </p>
+          <div className="flex flex-wrap items-center gap-2 mt-2 text-xs text-[#111113]/60">
+            <span className="font-semibold text-[#111113]">{business.name}</span>
+            <span>·</span>
+            <span className="font-mono-code text-[11px]">
               GSTIN: {business.gstin || 'NOT CONFIGURED'}
             </span>
-            <span className="text-xs text-slate-400">State: {business.state} ({business.stateCode})</span>
+            <span>·</span>
+            <span>State: {business.state} ({business.stateCode})</span>
           </div>
-          <h2 className="text-xl md:text-2xl font-bold tracking-tight text-white">{business.name}</h2>
-          <p className="text-xs md:text-sm text-slate-300 mt-1">
-            Real-time billing, tax liability, input tax credit, and inventory control.
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
           <button
             onClick={() => onNavigate('invoice-generator')}
-            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-all cursor-pointer"
+            className="btn-primary-v1 text-xs shadow-xs"
           >
-            <PlusCircle className="w-4 h-4" />
-            <span>Create Tax Invoice</span>
+            <Plus className="w-3.5 h-3.5" />
+            <span>Create Invoice</span>
           </button>
           <button
             onClick={() => onNavigate('purchases')}
-            className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium px-3.5 py-2.5 rounded-lg border border-slate-700 transition-all cursor-pointer"
+            className="btn-secondary-v1 text-xs"
           >
-            <TrendingDown className="w-4 h-4 text-emerald-400" />
             <span>Record Purchase</span>
           </button>
           <button
             onClick={() => onNavigate('gstr1')}
-            className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium px-3.5 py-2.5 rounded-lg border border-slate-700 transition-all cursor-pointer"
+            className="btn-secondary-v1 text-xs"
           >
-            <FileText className="w-4 h-4 text-indigo-400" />
-            <span>GSTR-1 Report</span>
+            <span>GSTR-1</span>
+          </button>
+          <button
+            onClick={() => onNavigate('backup-data')}
+            className="btn-secondary-v1 text-xs flex items-center gap-1.5"
+            title="Export or Restore Complete Database"
+          >
+            <HardDrive className="w-3.5 h-3.5 text-[#4f46e5]" />
+            <span>Backup & Restore</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Quick Backup Feedback Banner */}
+      {backupSuccessNotice && (
+        <div className="card-v1 p-3 bg-emerald-50/80 border-emerald-200 text-emerald-900 text-xs font-medium flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{backupSuccessNotice}</span>
+          </div>
+          <button
+            onClick={() => setBackupSuccessNotice(null)}
+            className="text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Data Safety & Portability Card */}
+      <div className="card-v1 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs bg-white">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded bg-[#111113] text-[#F8F7F4] flex items-center justify-center font-bold shrink-0">
+            <HardDrive className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="font-semibold text-[#111113] flex items-center gap-2">
+              <span>Data Safety & Portability Hub</span>
+              <span className="label text-[9px] text-[#4f46e5] border border-[rgba(17,17,19,0.12)] px-1.5 py-0.5 rounded">CGST Sec 36/44</span>
+            </div>
+            <p className="text-[11px] text-[#111113]/60 mt-0.5">
+              {lastBackupTimestamp ? `Last backed up: ${new Date(lastBackupTimestamp).toLocaleString('en-IN')}` : 'No local backup recorded yet.'} • Export to JSON or restore anytime to guarantee full data protection.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={handleQuickBackup}
+            className="btn-primary-v1 text-xs py-1.5 px-3 flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            title="Export full business database to a local JSON file"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Backup Data</span>
+          </button>
+          <button
+            onClick={() => onNavigate('backup-data')}
+            className="btn-secondary-v1 text-xs py-1.5 px-3 flex items-center gap-1.5 cursor-pointer"
+            title="Import and restore from a JSON backup file"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>Restore Data</span>
           </button>
         </div>
       </div>
 
-      {/* Primary KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Sales */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Total Sales</span>
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-              <TrendingUp className="w-4 h-4" />
-            </div>
+      {/* Primary 4-Metric Grid - Variation 1 Card */}
+      <section className="card-v1 p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div>
+          <div className="label">Total Sales</div>
+          <div className="text-2xl sm:text-3xl font-bold mt-2 text-[#111113] tracking-tight" style={{ letterSpacing: '-0.03em' }}>
+            {formatINR(totalSales)}
           </div>
-          <div className="text-2xl font-bold text-slate-900">{formatINR(totalSales)}</div>
-          <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
+          <div className="text-[11px] font-mono-code text-[#111113]/60 mt-1.5 flex items-center justify-between">
             <span>Taxable: {formatINR(totalTaxableSales)}</span>
-            <span className="text-emerald-700 font-semibold">{activeInvoices.length} Invoices</span>
+            <span className="font-semibold text-[#111113]">{activeInvoices.length} Invoices</span>
           </div>
         </div>
 
-        {/* GST Output Liability */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Output GST Liability</span>
-            <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
-              <Receipt className="w-4 h-4" />
-            </div>
+        <div>
+          <div className="label">Output GST</div>
+          <div className="text-2xl sm:text-3xl font-bold mt-2 text-[#111113] tracking-tight" style={{ letterSpacing: '-0.03em' }}>
+            {formatINR(totalOutputGst)}
           </div>
-          <div className="text-2xl font-bold text-slate-900">{formatINR(totalOutputGst)}</div>
-          <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
+          <div className="text-[11px] font-mono-code text-[#111113]/60 mt-1.5 flex items-center justify-between">
             <span>Collected on Sales</span>
-            <span className="text-rose-600 font-medium">To be paid</span>
+            <span className="text-[#111113]/80">Outward Tax</span>
           </div>
         </div>
 
-        {/* Eligible ITC */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Input Tax Credit (ITC)</span>
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-              <TrendingDown className="w-4 h-4" />
-            </div>
+        <div>
+          <div className="label">Input Tax (ITC)</div>
+          <div className="text-2xl sm:text-3xl font-bold mt-2 text-[#111113] tracking-tight" style={{ letterSpacing: '-0.03em' }}>
+            {formatINR(totalInputTaxCredit)}
           </div>
-          <div className="text-2xl font-bold text-slate-900">{formatINR(totalInputTaxCredit)}</div>
-          <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
+          <div className="text-[11px] font-mono-code text-[#111113]/60 mt-1.5 flex items-center justify-between">
             <span>Purchases: {formatINR(totalPurchases)}</span>
-            <span className="text-indigo-600 font-medium">{purchases.length} Bills</span>
+            <span className="text-[#111113]/80">{purchases.length} Bills</span>
           </div>
         </div>
 
-        {/* Net GST Payable */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider">Net GST Cash Payable</span>
-            <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
-              <CreditCard className="w-4 h-4" />
-            </div>
+        <div>
+          <div className="label">Net Payable</div>
+          <div className="text-2xl sm:text-3xl font-bold mt-2 text-[#4f46e5] tracking-tight" style={{ letterSpacing: '-0.03em' }}>
+            {formatINR(netGstLiability)}
           </div>
-          <div className="text-2xl font-bold text-amber-900">{formatINR(netGstLiability)}</div>
-          <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
+          <div className="text-[11px] font-mono-code text-[#111113]/60 mt-1.5 flex items-center justify-between">
             <span>After ITC Adjustment</span>
-            <span className="text-amber-700 font-semibold">GSTR-3B T6.1</span>
+            <span className="text-[#4f46e5] font-semibold">GSTR-3B T6.1</span>
           </div>
         </div>
-      </div>
+      </section>
 
       {/* Secondary Financial Cards (Receivables, Payables, Expenses) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {/* Receivables */}
-        <div className="bg-white p-4.5 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between">
+        <div className="card-v1 p-4.5 flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase">Receivables (Due from Customers)</p>
-            <p className="text-xl font-bold text-slate-800 mt-0.5">{formatINR(totalReceivables)}</p>
-            <p className="text-[11px] text-slate-500 mt-0.5">Total {customers.length} registered customers</p>
+            <div className="label">Receivables</div>
+            <div className="text-xl font-bold text-[#111113] mt-1 tracking-tight">{formatINR(totalReceivables)}</div>
+            <p className="text-[11px] text-[#111113]/55 mt-0.5">{customers.length} registered customers</p>
           </div>
           <button
             onClick={() => onNavigate('invoice-register')}
-            className="text-xs text-indigo-600 font-semibold hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+            className="text-xs font-semibold text-[#4f46e5] hover:underline flex items-center gap-1 cursor-pointer"
           >
             <span>View</span>
             <ArrowRight className="w-3.5 h-3.5" />
@@ -211,15 +278,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onOpenInvoice 
         </div>
 
         {/* Payables */}
-        <div className="bg-white p-4.5 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between">
+        <div className="card-v1 p-4.5 flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase">Payables (Due to Suppliers)</p>
-            <p className="text-xl font-bold text-slate-800 mt-0.5">{formatINR(totalPayables)}</p>
-            <p className="text-[11px] text-slate-500 mt-0.5">Total {suppliers.length} active suppliers</p>
+            <div className="label">Payables</div>
+            <div className="text-xl font-bold text-[#111113] mt-1 tracking-tight">{formatINR(totalPayables)}</div>
+            <p className="text-[11px] text-[#111113]/55 mt-0.5">{suppliers.length} active suppliers</p>
           </div>
           <button
             onClick={() => onNavigate('purchases')}
-            className="text-xs text-indigo-600 font-semibold hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+            className="text-xs font-semibold text-[#4f46e5] hover:underline flex items-center gap-1 cursor-pointer"
           >
             <span>View</span>
             <ArrowRight className="w-3.5 h-3.5" />
@@ -227,15 +294,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onOpenInvoice 
         </div>
 
         {/* Total Expenses */}
-        <div className="bg-white p-4.5 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between">
+        <div className="card-v1 p-4.5 flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-500 uppercase">Operating Expenses</p>
-            <p className="text-xl font-bold text-slate-800 mt-0.5">{formatINR(totalExpenses)}</p>
-            <p className="text-[11px] text-slate-500 mt-0.5">{expenses.length} categorized entries</p>
+            <div className="label">Operating Expenses</div>
+            <div className="text-xl font-bold text-[#111113] mt-1 tracking-tight">{formatINR(totalExpenses)}</div>
+            <p className="text-[11px] text-[#111113]/55 mt-0.5">{expenses.length} categorized entries</p>
           </div>
           <button
             onClick={() => onNavigate('expenses')}
-            className="text-xs text-indigo-600 font-semibold hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+            className="text-xs font-semibold text-[#4f46e5] hover:underline flex items-center gap-1 cursor-pointer"
           >
             <span>View</span>
             <ArrowRight className="w-3.5 h-3.5" />
@@ -297,90 +364,90 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onOpenInvoice 
       {/* Section: Monthly Profit and Revenue Trends Line Chart */}
       <FinancialTrendsSection />
 
-      {/* Recent Invoices Table */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-        <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-          <div>
-            <h3 className="font-bold text-slate-900 text-sm">Recent GST Invoices</h3>
-            <p className="text-xs text-slate-500">Live sales register and payment tracking</p>
-          </div>
+      {/* Recent Transactions Section - Variation 1 */}
+      <div>
+        <div className="flex items-center justify-between mb-2 px-0.5">
+          <div className="label">Recent Transactions</div>
           <button
             onClick={() => onNavigate('invoice-register')}
-            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+            className="text-xs font-semibold text-[#4f46e5] hover:underline flex items-center gap-1 cursor-pointer"
           >
-            <span>Full Invoice Register</span>
+            <span>Full Register</span>
             <ArrowUpRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
-                <th className="py-2.5 px-4">Invoice #</th>
-                <th className="py-2.5 px-4">Date</th>
-                <th className="py-2.5 px-4">Customer</th>
-                <th className="py-2.5 px-4">Place of Supply</th>
-                <th className="py-2.5 px-4">Taxable</th>
-                <th className="py-2.5 px-4">Total Amount</th>
-                <th className="py-2.5 px-4">Status</th>
-                <th className="py-2.5 px-4 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {invoices.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-10 text-center">
-                    <p className="font-semibold text-slate-700 text-xs">No GST invoices created yet</p>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Your sales register is completely clean. Click "Create Tax Invoice" to record your first sale.
-                    </p>
-                  </td>
+        <div className="card-v1 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-[rgba(17,17,19,0.12)] bg-white text-[#111113]">
+                  <th className="py-3 px-4 label font-medium">Invoice #</th>
+                  <th className="py-3 px-4 label font-medium">Date</th>
+                  <th className="py-3 px-4 label font-medium">Customer</th>
+                  <th className="py-3 px-4 label font-medium">Place of Supply</th>
+                  <th className="py-3 px-4 label font-medium">Taxable</th>
+                  <th className="py-3 px-4 label font-medium">Total</th>
+                  <th className="py-3 px-4 label font-medium">Status</th>
+                  <th className="py-3 px-4 label font-medium text-right">Action</th>
                 </tr>
-              ) : (
-                invoices.slice(0, 5).map((inv) => (
-                  <tr key={inv.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="py-3 px-4 font-semibold text-slate-900">{inv.invoiceNumber}</td>
-                    <td className="py-3 px-4 text-slate-600">{inv.date}</td>
-                    <td className="py-3 px-4">
-                      <p className="font-medium text-slate-800 truncate max-w-[180px]">{inv.customerName}</p>
-                      <p className="text-[11px] font-mono text-slate-400">{inv.customerGstin || 'URP'}</p>
-                    </td>
-                    <td className="py-3 px-4 text-slate-600">
-                      {inv.placeOfSupply} ({inv.placeOfSupplyCode})
-                    </td>
-                    <td className="py-3 px-4 font-mono">{formatINR(inv.totalTaxable)}</td>
-                    <td className="py-3 px-4 font-bold text-slate-900 font-mono">{formatINR(inv.grandTotal)}</td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${
-                          inv.status === 'PAID'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : inv.status === 'FINALIZED'
-                            ? 'bg-blue-100 text-blue-800'
-                            : inv.status === 'PARTIALLY_PAID'
-                            ? 'bg-amber-100 text-amber-800'
-                            : inv.status === 'CANCELLED'
-                            ? 'bg-rose-100 text-rose-800'
-                            : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        {inv.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        onClick={() => onOpenInvoice(inv.id)}
-                        className="text-indigo-600 hover:text-indigo-800 font-semibold text-xs cursor-pointer"
-                      >
-                        Open & PDF
-                      </button>
+              </thead>
+              <tbody className="divide-y divide-[rgba(17,17,19,0.06)] bg-white">
+                {invoices.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-12 text-center text-[#111113]/50">
+                      <p className="font-medium text-sm text-[#111113]">No records found.</p>
+                      <p className="text-xs mt-1 text-[#111113]/40">
+                        Click "Create Invoice" to issue your first GST invoice.
+                      </p>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  invoices.slice(0, 5).map((inv) => (
+                    <tr key={inv.id} className="hover:bg-[#F8F7F4]/80 transition-colors">
+                      <td className="py-3 px-4 font-mono-code font-bold text-[#111113]">{inv.invoiceNumber}</td>
+                      <td className="py-3 px-4 text-[#111113]/70 font-mono-code text-[11px]">{inv.date}</td>
+                      <td className="py-3 px-4">
+                        <p className="font-semibold text-[#111113] truncate max-w-[180px]">{inv.customerName}</p>
+                        <p className="text-[10px] font-mono-code text-[#111113]/40">{inv.customerGstin || 'URP'}</p>
+                      </td>
+                      <td className="py-3 px-4 text-[#111113]/70">
+                        {inv.placeOfSupply} ({inv.placeOfSupplyCode})
+                      </td>
+                      <td className="py-3 px-4 font-mono-code">{formatINR(inv.totalTaxable)}</td>
+                      <td className="py-3 px-4 font-bold text-[#111113] font-mono-code">{formatINR(inv.grandTotal)}</td>
+                      <td className="py-3 px-4">
+                        <span className="inline-flex items-center gap-1.5 font-mono-code text-[11px]">
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              inv.status === 'PAID'
+                                ? 'bg-emerald-600'
+                                : inv.status === 'FINALIZED'
+                                ? 'bg-[#111113]'
+                                : inv.status === 'PARTIALLY_PAID'
+                                ? 'bg-[#4f46e5]'
+                                : inv.status === 'CANCELLED'
+                                ? 'bg-rose-500'
+                                : 'bg-stone-400'
+                            }`}
+                          />
+                          <span className="text-[#111113] font-medium">{inv.status}</span>
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <button
+                          onClick={() => onOpenInvoice(inv.id)}
+                          className="text-[#4f46e5] hover:underline font-semibold text-xs cursor-pointer transition-colors"
+                        >
+                          View & PDF
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

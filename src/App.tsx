@@ -26,7 +26,10 @@ import { Gstr3bModule } from './components/gst/Gstr3bModule';
 import { Gstr2bReconciliation } from './components/gst/Gstr2bReconciliation';
 import { BusinessSettings } from './components/settings/BusinessSettings';
 import { AuditLogModal } from './components/settings/AuditLogModal';
+import { DataBackupRestore } from './components/settings/DataBackupRestore';
 import { RunLocalModal } from './components/common/RunLocalModal';
+import { GoogleWorkspaceHub } from './components/workspace/GoogleWorkspaceHub';
+import { TaxAdvisorChatbot } from './components/chatbot/TaxAdvisorChatbot';
 import { Invoice, Quotation } from './types';
 
 function MainLayout() {
@@ -39,6 +42,7 @@ function MainLayout() {
   const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null);
   const [ledgerPartyId, setLedgerPartyId] = useState<string | null>(null);
   const [showRunLocalModal, setShowRunLocalModal] = useState(false);
+  const [isGlobalAIChatOpen, setIsGlobalAIChatOpen] = useState(false);
 
   // Global hotkeys
   useEffect(() => {
@@ -117,7 +121,7 @@ function MainLayout() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-800 font-sans">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#F8F7F4] text-[#111113] font-sans selection:bg-[#4f46e5] selection:text-[#F8F7F4]">
       {/* Sidebar */}
       <Sidebar
         currentTab={currentTab}
@@ -140,69 +144,83 @@ function MainLayout() {
           onSelectInvoice={handleSelectInvoiceFromSearch}
           onSelectCustomer={handleSelectCustomerFromSearch}
           onSelectProduct={handleSelectProductFromSearch}
+          onOpenAI={() => setIsGlobalAIChatOpen(true)}
         />
 
-        {/* Scrollable Viewport */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 scrollbar-thin">
-          {currentTab === 'dashboard' && (
-            <Dashboard
-              onNavigate={(tab) => {
-                if (tab === 'invoice-generator') setEditingInvoiceId(null);
-                setCurrentTab(tab);
-              }}
-              onOpenInvoice={(id) => handleEditInvoice(id)}
-            />
-          )}
+        {/* Scrollable Viewport - Fits horizontally on one single screen */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-6 scrollbar-thin">
+          <div className="w-full max-w-7xl mx-auto space-y-6">
+            {currentTab === 'dashboard' && (
+              <Dashboard
+                onNavigate={(tab) => {
+                  if (tab === 'invoice-generator') setEditingInvoiceId(null);
+                  setCurrentTab(tab);
+                }}
+                onOpenInvoice={(id) => handleEditInvoice(id)}
+              />
+            )}
 
-          {currentTab === 'invoice-generator' && (
-            <InvoiceGenerator
-              initialInvoiceId={editingInvoiceId}
-              onDone={() => setCurrentTab('invoice-register')}
-              onOpenPreview={(inv) => setPreviewInvoice(inv)}
-            />
-          )}
+            {currentTab === 'invoice-generator' && (
+              <InvoiceGenerator
+                initialInvoiceId={editingInvoiceId}
+                onDone={() => setCurrentTab('invoice-register')}
+                onOpenPreview={(inv) => setPreviewInvoice(inv)}
+              />
+            )}
 
-          {currentTab === 'invoice-register' && (
-            <InvoiceRegister
-              onNewInvoice={handleCreateNewInvoice}
-              onEditInvoice={handleEditInvoice}
-              onPreviewInvoice={(inv) => setPreviewInvoice(inv)}
-            />
-          )}
+            {currentTab === 'invoice-register' && (
+              <InvoiceRegister
+                onNewInvoice={handleCreateNewInvoice}
+                onEditInvoice={handleEditInvoice}
+                onPreviewInvoice={(inv) => setPreviewInvoice(inv)}
+              />
+            )}
 
-          {currentTab === 'quotations' && (
-            <QuotationsModule onConvertToInvoice={handleConvertQuoteToInvoice} />
-          )}
+            {currentTab === 'quotations' && (
+              <QuotationsModule onConvertToInvoice={handleConvertQuoteToInvoice} />
+            )}
 
-          {currentTab === 'customers' && (
-            <CustomerManagement onViewLedger={handleViewLedger} />
-          )}
+            {currentTab === 'customers' && (
+              <CustomerManagement onViewLedger={handleViewLedger} />
+            )}
 
-          {currentTab === 'suppliers' && (
-            <SupplierManagement onViewLedger={handleViewLedger} />
-          )}
+            {currentTab === 'suppliers' && (
+              <SupplierManagement onViewLedger={handleViewLedger} />
+            )}
 
-          {currentTab === 'products' && <ProductManagement />}
+            {currentTab === 'products' && <ProductManagement />}
 
-          {currentTab === 'purchases' && <PurchaseManagement />}
+            {currentTab === 'purchases' && <PurchaseManagement />}
 
-          {currentTab === 'expenses' && <ExpenseManagement />}
+            {currentTab === 'expenses' && <ExpenseManagement />}
 
-          {currentTab === 'payments' && <PaymentManagement />}
+            {currentTab === 'payments' && <PaymentManagement />}
 
-          {currentTab === 'credit-notes' && <CreditNotesModule />}
+            {currentTab === 'credit-notes' && <CreditNotesModule />}
 
-          {currentTab === 'ledgers' && <LedgersModule initialPartyId={ledgerPartyId} />}
+            {currentTab === 'ledgers' && <LedgersModule initialPartyId={ledgerPartyId} />}
 
-          {currentTab === 'gstr1' && <Gstr1Module />}
+            {currentTab === 'gstr1' && <Gstr1Module />}
 
-          {currentTab === 'gstr3b' && <Gstr3bModule />}
+            {currentTab === 'gstr3b' && <Gstr3bModule />}
 
-          {currentTab === 'gstr2b' && <Gstr2bReconciliation />}
+            {currentTab === 'gstr2b' && <Gstr2bReconciliation />}
 
-          {currentTab === 'settings' && <BusinessSettings />}
+            {currentTab === 'backup-data' && <DataBackupRestore />}
 
-          {currentTab === 'audit-trail' && <AuditLogModal />}
+            {currentTab === 'settings' && <BusinessSettings />}
+
+            {currentTab === 'audit-trail' && <AuditLogModal />}
+
+            {currentTab === 'google-workspace' && (
+              <GoogleWorkspaceHub
+                onOpenInvoicePreview={(invId) => {
+                  const inv = invoices.find((i) => i.id === invId);
+                  if (inv) setPreviewInvoice(inv);
+                }}
+              />
+            )}
+          </div>
         </main>
       </div>
 
@@ -222,6 +240,13 @@ function MainLayout() {
       {showRunLocalModal && (
         <RunLocalModal onClose={() => setShowRunLocalModal(false)} />
       )}
+
+      {/* Global AI Assistant & Directory Navigator */}
+      <TaxAdvisorChatbot
+        isOpen={isGlobalAIChatOpen}
+        onClose={() => setIsGlobalAIChatOpen(false)}
+        onNavigate={(tab) => setCurrentTab(tab as NavTab)}
+      />
     </div>
   );
 }

@@ -16,17 +16,46 @@ import {
   Mail,
   MapPin,
 } from 'lucide-react';
+import { exportSuppliersToExcel, exportSuppliersToCSV } from '../../services/excelExporter';
+import { TableExportDropdown } from '../common/TableExportDropdown';
 
 interface SupplierManagementProps {
   onViewLedger?: (supplierId: string) => void;
 }
 
 export const SupplierManagement: React.FC<SupplierManagementProps> = ({ onViewLedger }) => {
-  const { suppliers, addSupplier, updateSupplier, deleteSupplier, business } = useBusiness();
+  const { suppliers, addSupplier, updateSupplier, deleteSupplier, business, logAppAction } = useBusiness();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+
+  // Table Export Handlers (Excel and CSV)
+  const handleExportExcel = () => {
+    if (filteredSuppliers.length === 0) return;
+    const cleanBiz = (business.name || 'Business').replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `Supplier_Vendor_Registry_${cleanBiz}_${new Date().toISOString().split('T')[0]}.xlsx`;
+    exportSuppliersToExcel(filteredSuppliers, fileName);
+    logAppAction(
+      'Export Suppliers',
+      'EXPORT',
+      `Exported ${filteredSuppliers.length} supplier records to Excel (${fileName})`,
+      { status: 'success' }
+    );
+  };
+
+  const handleExportCSV = () => {
+    if (filteredSuppliers.length === 0) return;
+    const cleanBiz = (business.name || 'Business').replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `Supplier_Vendor_Registry_${cleanBiz}_${new Date().toISOString().split('T')[0]}.csv`;
+    exportSuppliersToCSV(filteredSuppliers, fileName);
+    logAppAction(
+      'Export Suppliers',
+      'EXPORT',
+      `Exported ${filteredSuppliers.length} supplier records to CSV (${fileName})`,
+      { status: 'success' }
+    );
+  };
 
   const [formData, setFormData] = useState({
     name: '',
@@ -155,13 +184,24 @@ export const SupplierManagement: React.FC<SupplierManagementProps> = ({ onViewLe
           </p>
         </div>
 
-        <button
-          onClick={handleOpenAdd}
-          className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add Supplier</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <TableExportDropdown
+            label="Export"
+            count={filteredSuppliers.length}
+            onExportExcel={handleExportExcel}
+            onExportCSV={handleExportCSV}
+            disabled={filteredSuppliers.length === 0}
+            variant="emerald"
+          />
+
+          <button
+            onClick={handleOpenAdd}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add Supplier</span>
+          </button>
+        </div>
       </div>
 
       {/* Search */}

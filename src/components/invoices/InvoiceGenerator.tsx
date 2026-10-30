@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useBusiness } from '../../context/BusinessContext';
+import { useAuth } from '../../context/AuthContext';
+import { db } from '../../firebase/config';
+import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import {
   LineItem,
   Invoice,
@@ -44,9 +47,15 @@ import {
   ArrowLeft,
   RotateCcw,
   Edit3,
+  FileSpreadsheet,
+  Shield,
+  Sliders,
+  Truck,
+  MapPin,
 } from 'lucide-react';
 import { validateGSTIN } from '../../utils/gstinValidator';
 import { CompanyModal } from '../common/CompanyModal';
+import { ExcelShareModal } from '../common/ExcelShareModal';
 
 interface InvoiceGeneratorProps {
   initialInvoiceId?: string | null;
@@ -69,9 +78,13 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     invoices,
     saveInvoice,
     addCustomer,
+    logAppAction,
   } = useBusiness();
 
+  const { user } = useAuth();
+
   const [isAddCompanyModalOpen, setIsAddCompanyModalOpen] = useState(false);
+  const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
   // Selected or existing invoice
   const existingInvoice = useMemo(() => {
@@ -87,6 +100,8 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     d.setDate(d.getDate() + 15);
     return d.toISOString().split('T')[0];
   });
+  const [contractNo, setContractNo] = useState<string>('');
+  const [contractDate, setContractDate] = useState<string>('');
 
   // Customer state
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
@@ -94,10 +109,31 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
   const [customerGstin, setCustomerGstin] = useState<string>('');
   const [customerAddress, setCustomerAddress] = useState<string>('');
   const [customerPhone, setCustomerPhone] = useState<string>('');
+  const [customerEmail, setCustomerEmail] = useState<string>('');
   const [placeOfSupplyCode, setPlaceOfSupplyCode] = useState<string>(business.stateCode || '27');
   const [reverseCharge, setReverseCharge] = useState<boolean>(false);
   const [notes, setNotes] = useState<string>('');
   const [terms, setTerms] = useState<string>(business.termsAndConditions || '');
+
+  // Distinct Shipped-To (Consignee / Destination) state
+  const [isDifferentShipTo, setIsDifferentShipTo] = useState<boolean>(false);
+  const [shippingName, setShippingName] = useState<string>('');
+  const [shippingGstin, setShippingGstin] = useState<string>('');
+  const [shippingAddress, setShippingAddress] = useState<string>('');
+  const [shippingStateCode, setShippingStateCode] = useState<string>(business.stateCode || '27');
+  const [shippingPhone, setShippingPhone] = useState<string>('');
+
+  const shippingStateName = useMemo(() => {
+    return INDIAN_STATES.find((s) => s.code === shippingStateCode)?.name || 'Maharashtra';
+  }, [shippingStateCode]);
+
+  // Overwriting Authority for Adjusting Amount & Round-off Override
+  const [enableAuthorityAdjustment, setEnableAuthorityAdjustment] = useState<boolean>(false);
+  const [manualAdjustment, setManualAdjustment] = useState<number>(0);
+  const [adjustmentReason, setAdjustmentReason] = useState<string>('');
+  const [adjustmentAuthorizedBy, setAdjustmentAuthorizedBy] = useState<string>('Manager / Accounts Head');
+  const [isManualRoundOff, setIsManualRoundOff] = useState<boolean>(false);
+  const [customRoundOff, setCustomRoundOff] = useState<number>(0);
 
   // Line Items
   const [items, setItems] = useState<LineItem[]>([
@@ -131,42 +167,90 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
 
   // Auto-Save States & Storage
   const AUTOSAVE_STORAGE_KEY = 'invoicepro_autosave_invoice_draft_v1';
+  const userDraftKey = user ? `${AUTOSAVE_STORAGE_KEY}_${user.uid}` : AUTOSAVE_STORAGE_KEY;
   const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(true);
   const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
   const [lastAutoSavedAt, setLastAutoSavedAt] = useState<string | null>(null);
   const [hasUnsavedDraft, setHasUnsavedDraft] = useState<boolean>(false);
   const [draftInfo, setDraftInfo] = useState<{ time: string; customerName: string; itemCount: number } | null>(null);
+  const cachedDraftDataRef = React.useRef<any>(null);
   const isInitialMount = React.useRef(true);
 
-  // Inspect storage for recoverable draft on mount
+  // Inspect storage for recoverable draft on mount and whenever user or business changes
   useEffect(() => {
-    if (!initialInvoiceId) {
+    if (initialInvoiceId) return;
+
+    let isCancelled = false;
+
+    const inspectDraft = async () => {
+      // 1. First inspect local storage
+      let localDraft: any = null;
       try {
-        const raw = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+        const rawUser = user ? localStorage.getItem(userDraftKey) : null;
+        const rawGeneric = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+        const raw = rawUser || rawGeneric;
         if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed && (parsed.customerName || (parsed.items && parsed.items.length > 0 && parsed.items[0].name))) {
-            setHasUnsavedDraft(true);
-            setDraftInfo({
-              time: parsed.savedAt || 'earlier session',
-              customerName: parsed.customerName || 'Untitled customer',
-              itemCount: parsed.items?.length || 1,
-            });
-          }
+          localDraft = JSON.parse(raw);
         }
       } catch (e) {
-        console.warn('Could not inspect autosave draft', e);
+        console.warn('Error reading local draft:', e);
       }
-    }
-  }, [initialInvoiceId]);
+
+      // 2. If user is logged in, also check cloud draft in Firestore
+      let cloudDraft: any = null;
+      if (user && business?.id) {
+        try {
+          const draftDocRef = doc(db, 'businesses', business.id, 'drafts', user.uid);
+          const snap = await getDoc(draftDocRef);
+          if (snap.exists()) {
+            cloudDraft = snap.data();
+          }
+        } catch (e) {
+          console.warn('Error reading cloud draft:', e);
+        }
+      }
+
+      if (isCancelled) return;
+
+      const chosenDraft = cloudDraft || localDraft;
+      if (
+        chosenDraft &&
+        (chosenDraft.customerName ||
+          (chosenDraft.items && chosenDraft.items.length > 0 && chosenDraft.items[0].name))
+      ) {
+        cachedDraftDataRef.current = chosenDraft;
+        setHasUnsavedDraft(true);
+        setDraftInfo({
+          time: chosenDraft.savedAt || 'earlier session',
+          customerName: chosenDraft.customerName || 'Untitled customer',
+          itemCount: chosenDraft.items?.length || 1,
+        });
+      }
+    };
+
+    inspectDraft();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [initialInvoiceId, user, business?.id, userDraftKey]);
 
   const handleRestoreDraft = () => {
     try {
-      const raw = localStorage.getItem(AUTOSAVE_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
+      const parsed =
+        cachedDraftDataRef.current ||
+        (() => {
+          const raw =
+            (user ? localStorage.getItem(userDraftKey) : null) ||
+            localStorage.getItem(AUTOSAVE_STORAGE_KEY);
+          return raw ? JSON.parse(raw) : null;
+        })();
+
+      if (parsed) {
         if (parsed.invoiceType) setInvoiceType(parsed.invoiceType);
         if (parsed.invoiceNumber) setInvoiceNumber(parsed.invoiceNumber);
+        if (parsed.contractNo) setContractNo(parsed.contractNo);
+        if (parsed.contractDate) setContractDate(parsed.contractDate);
         if (parsed.date) setDate(parsed.date);
         if (parsed.dueDate) setDueDate(parsed.dueDate);
         if (parsed.selectedCustomerId) setSelectedCustomerId(parsed.selectedCustomerId);
@@ -174,14 +258,36 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
         if (parsed.customerGstin) setCustomerGstin(parsed.customerGstin);
         if (parsed.customerAddress) setCustomerAddress(parsed.customerAddress);
         if (parsed.customerPhone) setCustomerPhone(parsed.customerPhone);
+        if (parsed.customerEmail) setCustomerEmail(parsed.customerEmail);
         if (parsed.placeOfSupplyCode) setPlaceOfSupplyCode(parsed.placeOfSupplyCode);
         if (parsed.reverseCharge !== undefined) setReverseCharge(parsed.reverseCharge);
         if (parsed.notes) setNotes(parsed.notes);
         if (parsed.terms) setTerms(parsed.terms);
         if (parsed.items && parsed.items.length > 0) setItems(parsed.items);
         if (parsed.paidAmount !== undefined) setPaidAmount(parsed.paidAmount);
+        if (parsed.enableAuthorityAdjustment !== undefined)
+          setEnableAuthorityAdjustment(parsed.enableAuthorityAdjustment);
+        if (parsed.manualAdjustment !== undefined) setManualAdjustment(parsed.manualAdjustment);
+        if (parsed.adjustmentReason) setAdjustmentReason(parsed.adjustmentReason);
+        if (parsed.adjustmentAuthorizedBy) setAdjustmentAuthorizedBy(parsed.adjustmentAuthorizedBy);
+        if (parsed.isManualRoundOff !== undefined) setIsManualRoundOff(parsed.isManualRoundOff);
+        if (parsed.customRoundOff !== undefined) setCustomRoundOff(parsed.customRoundOff);
+
+        if (parsed.isDifferentShipTo !== undefined) setIsDifferentShipTo(parsed.isDifferentShipTo);
+        if (parsed.shippingName) setShippingName(parsed.shippingName);
+        if (parsed.shippingGstin) setShippingGstin(parsed.shippingGstin);
+        if (parsed.shippingAddress) setShippingAddress(parsed.shippingAddress);
+        if (parsed.shippingStateCode) setShippingStateCode(parsed.shippingStateCode);
+        if (parsed.shippingPhone) setShippingPhone(parsed.shippingPhone);
+
         setHasUnsavedDraft(false);
         setSaveSuccessMsg('Restored auto-saved draft successfully!');
+        logAppAction(
+          'Restored Invoice Draft',
+          'AUTOSAVE',
+          `Restored draft for ${parsed.customerName || 'customer'} (${parsed.items?.length || 1} items)`,
+          { status: 'success' }
+        );
         setTimeout(() => setSaveSuccessMsg(null), 3500);
       }
     } catch (e) {
@@ -189,10 +295,24 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     }
   };
 
-  const handleDiscardDraft = () => {
+  const handleDiscardDraft = async () => {
     localStorage.removeItem(AUTOSAVE_STORAGE_KEY);
+    if (user) {
+      localStorage.removeItem(userDraftKey);
+    }
+    if (user && business?.id) {
+      try {
+        await deleteDoc(doc(db, 'businesses', business.id, 'drafts', user.uid));
+      } catch (err) {
+        console.warn('Could not delete cloud draft:', err);
+      }
+    }
+    cachedDraftDataRef.current = null;
     setHasUnsavedDraft(false);
     setDraftInfo(null);
+    logAppAction('Discarded Draft', 'AUTOSAVE', 'Cleared invoice auto-save draft from storage', {
+      status: 'info',
+    });
   };
 
   // Debounced Auto-Save effect
@@ -210,18 +330,26 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     if (!hasMeaningfulContent) return;
 
     setIsAutoSaving(true);
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       try {
         const draftPayload = {
           invoiceType,
           invoiceNumber,
+          contractNo,
+          contractDate,
           date,
-          dueDate,
           selectedCustomerId,
           customerName,
           customerGstin,
           customerAddress,
           customerPhone,
+          customerEmail,
+          isDifferentShipTo,
+          shippingName,
+          shippingGstin,
+          shippingAddress,
+          shippingStateCode,
+          shippingPhone,
           placeOfSupplyCode,
           reverseCharge,
           notes,
@@ -229,11 +357,29 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
           items,
           paidAmount,
           status,
+          enableAuthorityAdjustment,
+          manualAdjustment,
+          adjustmentReason,
+          adjustmentAuthorizedBy,
+          isManualRoundOff,
+          customRoundOff,
           targetBusinessId: business.id,
-          savedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          savedAt: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
         };
         localStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(draftPayload));
+        if (user) {
+          localStorage.setItem(userDraftKey, JSON.stringify(draftPayload));
+        }
         setLastAutoSavedAt(draftPayload.savedAt);
+
+        // Also sync draft to cloud if user is authenticated
+        if (user && business?.id) {
+          await setDoc(doc(db, 'businesses', business.id, 'drafts', user.uid), draftPayload);
+        }
       } catch (err) {
         console.warn('Auto-save write error:', err);
       } finally {
@@ -248,18 +394,34 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     customerGstin,
     customerAddress,
     customerPhone,
+    customerEmail,
+    isDifferentShipTo,
+    shippingName,
+    shippingGstin,
+    shippingAddress,
+    shippingStateCode,
+    shippingPhone,
     placeOfSupplyCode,
     invoiceType,
     invoiceNumber,
+    contractNo,
+    contractDate,
     date,
-    dueDate,
     reverseCharge,
     notes,
     terms,
     items,
     paidAmount,
     status,
+    enableAuthorityAdjustment,
+    manualAdjustment,
+    adjustmentReason,
+    adjustmentAuthorizedBy,
+    isManualRoundOff,
+    customRoundOff,
     business.id,
+    user,
+    userDraftKey,
   ]);
 
   // Quick Customer Creation modal
@@ -311,20 +473,51 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     if (existingInvoice) {
       setInvoiceType(existingInvoice.invoiceType);
       setInvoiceNumber(existingInvoice.invoiceNumber);
+      setContractNo(existingInvoice.contractNo || '');
+      setContractDate(existingInvoice.contractDate || '');
       setDate(existingInvoice.date);
-      setDueDate(existingInvoice.dueDate);
+      if (existingInvoice.dueDate) setDueDate(existingInvoice.dueDate);
       setSelectedCustomerId(existingInvoice.customerId);
       setCustomerName(existingInvoice.customerName);
       setCustomerGstin(existingInvoice.customerGstin || '');
       setCustomerAddress(existingInvoice.customerAddress || '');
       setCustomerPhone(existingInvoice.customerPhone || '');
+      setCustomerEmail(existingInvoice.customerEmail || '');
       setPlaceOfSupplyCode(existingInvoice.placeOfSupplyCode);
       setReverseCharge(existingInvoice.reverseCharge);
+
+      if (existingInvoice.shippingName || existingInvoice.shippingAddress || existingInvoice.shippingGstin) {
+        setIsDifferentShipTo(true);
+        setShippingName(existingInvoice.shippingName || '');
+        setShippingGstin(existingInvoice.shippingGstin || '');
+        setShippingAddress(existingInvoice.shippingAddress || '');
+        setShippingStateCode(existingInvoice.shippingStateCode || existingInvoice.placeOfSupplyCode || '27');
+        setShippingPhone(existingInvoice.shippingPhone || '');
+      } else {
+        setIsDifferentShipTo(false);
+        setShippingName('');
+        setShippingGstin('');
+        setShippingAddress('');
+        setShippingStateCode(existingInvoice.placeOfSupplyCode || '27');
+        setShippingPhone('');
+      }
+
       setNotes(existingInvoice.notes || '');
       setTerms(existingInvoice.terms || '');
       setStatus(existingInvoice.status);
       setPaidAmount(existingInvoice.paidAmount || 0);
       setItems(existingInvoice.items);
+
+      if (existingInvoice.manualAdjustment !== undefined && existingInvoice.manualAdjustment !== 0) {
+        setEnableAuthorityAdjustment(true);
+        setManualAdjustment(existingInvoice.manualAdjustment);
+        setAdjustmentReason(existingInvoice.adjustmentReason || '');
+        setAdjustmentAuthorizedBy(existingInvoice.adjustmentAuthorizedBy || 'Manager');
+      }
+      if (existingInvoice.isManualRoundOff) {
+        setIsManualRoundOff(true);
+        setCustomRoundOff(existingInvoice.roundOff);
+      }
     } else {
       // Auto-generate invoice number
       const nextNum = business.nextInvoiceNumber || 101;
@@ -343,6 +536,7 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
       setCustomerGstin(cust.gstin || '');
       setCustomerAddress(cust.billingAddress || '');
       setCustomerPhone(cust.phone || '');
+      if (cust.email) setCustomerEmail(cust.email);
       const newPos = cust.stateCode || business.stateCode;
       setPlaceOfSupplyCode(newPos);
       setItems((prev) => recalculateAllItems(prev, newPos));
@@ -429,10 +623,14 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     setItems(items.filter((_, i) => i !== index));
   };
 
-  // Aggregate totals
+  // Aggregate totals with Manager/Authority adjustment and round-off override
   const totals = useMemo(() => {
-    return calculateInvoiceTotals(items);
-  }, [items]);
+    return calculateInvoiceTotals(items, {
+      manualAdjustment: enableAuthorityAdjustment ? Number(manualAdjustment) || 0 : 0,
+      customRoundOff: Number(customRoundOff) || 0,
+      isManualRoundOff,
+    });
+  }, [items, enableAuthorityAdjustment, manualAdjustment, customRoundOff, isManualRoundOff]);
 
   const balanceDue = useMemo(() => {
     return Math.max(0, totals.grandTotal - (Number(paidAmount) || 0));
@@ -471,21 +669,31 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
 
     setIsSaving(true);
     try {
+      const effectiveAdjustment = enableAuthorityAdjustment ? Number(manualAdjustment) || 0 : 0;
       const invoicePayload: Omit<Invoice, 'id' | 'businessId' | 'ownerUid' | 'createdAt' | 'updatedAt'> = {
         invoiceNumber,
         invoiceType,
         status: targetStatus,
         date,
-        dueDate,
+        dueDate: undefined,
         customerId: selectedCustomerId,
         customerName,
         customerGstin,
         customerAddress,
         customerPhone,
+        customerEmail,
+        shippingName: isDifferentShipTo && shippingName.trim() ? shippingName.trim() : undefined,
+        shippingGstin: isDifferentShipTo && shippingGstin.trim() ? shippingGstin.trim() : undefined,
+        shippingAddress: isDifferentShipTo && shippingAddress.trim() ? shippingAddress.trim() : undefined,
+        shippingState: isDifferentShipTo ? shippingStateName : undefined,
+        shippingStateCode: isDifferentShipTo ? shippingStateCode : undefined,
+        shippingPhone: isDifferentShipTo && shippingPhone.trim() ? shippingPhone.trim() : undefined,
         placeOfSupply: placeOfSupplyName,
         placeOfSupplyCode,
         isInterState,
         reverseCharge,
+        contractNo: contractNo.trim() || undefined,
+        contractDate: contractDate || undefined,
         items: validItems,
         subTotal: totals.subTotal,
         discountTotal: totals.discountTotal,
@@ -495,6 +703,10 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
         igstTotal: totals.igstTotal,
         cessTotal: totals.cessTotal,
         roundOff: totals.roundOff,
+        isManualRoundOff,
+        manualAdjustment: effectiveAdjustment,
+        adjustmentReason: enableAuthorityAdjustment && adjustmentReason ? adjustmentReason : undefined,
+        adjustmentAuthorizedBy: enableAuthorityAdjustment && adjustmentAuthorizedBy ? adjustmentAuthorizedBy : undefined,
         grandTotal: totals.grandTotal,
         amountInWords: totals.amountInWords,
         paidAmount: targetStatus === 'PAID' ? totals.grandTotal : Number(paidAmount) || 0,
@@ -505,8 +717,23 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
 
       const saved = await saveInvoice(invoicePayload, existingInvoice?.id);
       localStorage.removeItem(AUTOSAVE_STORAGE_KEY);
+      if (user) {
+        localStorage.removeItem(userDraftKey);
+      }
+      if (user && business?.id) {
+        deleteDoc(doc(db, 'businesses', business.id, 'drafts', user.uid)).catch(() => {});
+      }
+      cachedDraftDataRef.current = null;
       setHasUnsavedDraft(false);
       setLastAutoSavedAt(null);
+
+      // Log central audit app action
+      logAppAction(
+        existingInvoice ? 'Updated Invoice' : 'Created Invoice',
+        'INVOICE',
+        `${existingInvoice ? 'Updated' : 'Created'} ${invoiceType} #${saved.invoiceNumber} for ₹${totals.grandTotal.toLocaleString('en-IN')}${effectiveAdjustment !== 0 ? ` (Authority override: ${effectiveAdjustment > 0 ? '+' : ''}₹${effectiveAdjustment})` : ''}`,
+        { entityId: saved.id, entityNumber: saved.invoiceNumber, status: 'success' }
+      );
 
       setStatus(targetStatus);
       setSaveSuccessMsg(
@@ -526,6 +753,7 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
       setIsSaving(false);
     }
   };
+
 
   // Quick Customer Creation
   const handleCreateCustomerSubmit = async (e: React.FormEvent) => {
@@ -567,16 +795,25 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     invoiceType,
     status,
     date,
-    dueDate,
+    dueDate: undefined,
     customerId: selectedCustomerId,
     customerName,
     customerGstin,
     customerAddress,
     customerPhone,
+    customerEmail,
+    shippingName: isDifferentShipTo && shippingName.trim() ? shippingName.trim() : undefined,
+    shippingGstin: isDifferentShipTo && shippingGstin.trim() ? shippingGstin.trim() : undefined,
+    shippingAddress: isDifferentShipTo && shippingAddress.trim() ? shippingAddress.trim() : undefined,
+    shippingState: isDifferentShipTo ? shippingStateName : undefined,
+    shippingStateCode: isDifferentShipTo ? shippingStateCode : undefined,
+    shippingPhone: isDifferentShipTo && shippingPhone.trim() ? shippingPhone.trim() : undefined,
     placeOfSupply: placeOfSupplyName,
     placeOfSupplyCode,
     isInterState,
     reverseCharge,
+    contractNo: contractNo.trim() || undefined,
+    contractDate: contractDate || undefined,
     items,
     subTotal: totals.subTotal,
     discountTotal: totals.discountTotal,
@@ -586,6 +823,10 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
     igstTotal: totals.igstTotal,
     cessTotal: totals.cessTotal,
     roundOff: totals.roundOff,
+    isManualRoundOff,
+    manualAdjustment: enableAuthorityAdjustment ? Number(manualAdjustment) || 0 : 0,
+    adjustmentReason: enableAuthorityAdjustment ? adjustmentReason : undefined,
+    adjustmentAuthorizedBy: enableAuthorityAdjustment ? adjustmentAuthorizedBy : undefined,
     grandTotal: totals.grandTotal,
     amountInWords: totals.amountInWords,
     paidAmount: Number(paidAmount) || 0,
@@ -700,6 +941,17 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
           >
             <FileDown className="w-4 h-4 text-indigo-600" />
             <span>Download PDF</span>
+          </button>
+
+          {/* Excel Share & Download */}
+          <button
+            type="button"
+            onClick={() => setIsExcelModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-lg border border-emerald-200 transition-colors cursor-pointer"
+            title="Download or share invoice as Excel spreadsheet (.xlsx)"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            <span>Excel</span>
           </button>
 
           {/* Print */}
@@ -877,7 +1129,7 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
         </div>
 
         {/* Section 1: Business and Invoice Meta */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-4 border-b border-slate-200">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pb-4 border-b border-slate-200">
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice Type</label>
             <select
@@ -897,40 +1149,52 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
               type="text"
               value={invoiceNumber}
               onChange={(e) => setInvoiceNumber(e.target.value)}
-              placeholder="e.g. INV/26-27/104"
+              placeholder="e.g. INV/26-27/1"
               className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 font-mono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice Date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice Date</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Contract No</label>
               <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
+                type="text"
+                value={contractNo}
+                onChange={(e) => setContractNo(e.target.value)}
+                placeholder="e.g. CNT-001"
+                className="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 font-mono"
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Due Date</label>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Contract Date</label>
               <input
                 type="date"
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
+                value={contractDate}
+                onChange={(e) => setContractDate(e.target.value)}
                 className="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
               />
             </div>
           </div>
         </div>
 
-        {/* Section 2: Customer / Buyer Details */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-4 border-b border-slate-200">
-          {/* Customer Selection & Details */}
+        {/* Section 2: Dedicated Columns for Billed To, Shipped To (When Different), and GST Engine */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 pb-5 border-b border-slate-200">
+          {/* Column 1: Billed To (Buyer / Recipient) */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                Billed To (Customer Details)
+              <label className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                <Building className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Billed To (Buyer)</span>
               </label>
               <button
                 type="button"
@@ -938,7 +1202,7 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
                 className="flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 cursor-pointer"
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>+ Add New Customer</span>
+                <span>+ Add Customer</span>
               </button>
             </div>
 
@@ -958,41 +1222,47 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
               </select>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div>
-                <label className="block text-[11px] font-medium text-slate-500 mb-1">Customer / Trade Name *</label>
-                <input
-                  type="text"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="e.g. Bharat Logistics Ltd"
-                  className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-slate-500 mb-1">Customer GSTIN / UIN</label>
-                <input
-                  type="text"
-                  value={customerGstin}
-                  onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
-                  placeholder="15-character GSTIN (Leave blank for URP)"
-                  maxLength={15}
-                  className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-500 mb-1">Customer / Trade Name *</label>
+              <input
+                type="text"
+                value={customerName}
+                onChange={(e) => {
+                  setCustomerName(e.target.value);
+                  if (!isDifferentShipTo) setShippingName(e.target.value);
+                }}
+                placeholder="e.g. Bharat Logistics Ltd"
+                className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
+              />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div>
-                <label className="block text-[11px] font-medium text-slate-500 mb-1">Billing Address</label>
-                <input
-                  type="text"
-                  value={customerAddress}
-                  onChange={(e) => setCustomerAddress(e.target.value)}
-                  placeholder="Street, City, Pincode"
-                  className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-500 mb-1">Customer GSTIN / UIN</label>
+              <input
+                type="text"
+                value={customerGstin}
+                onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
+                placeholder="15-character GSTIN (Leave blank for URP)"
+                maxLength={15}
+                className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-500 mb-1">Billing Address</label>
+              <textarea
+                rows={2}
+                value={customerAddress}
+                onChange={(e) => {
+                  setCustomerAddress(e.target.value);
+                  if (!isDifferentShipTo) setShippingAddress(e.target.value);
+                }}
+                placeholder="Street, Building, City, Pincode"
+                className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 resize-none"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-[11px] font-medium text-slate-500 mb-1">Phone / Mobile</label>
                 <input
@@ -1003,13 +1273,156 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
                   className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
+              <div>
+                <label className="block text-[11px] font-medium text-slate-500 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={customerEmail}
+                  onChange={(e) => setCustomerEmail(e.target.value)}
+                  placeholder="accounts@buyer.com"
+                  className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
             </div>
           </div>
 
-          {/* Place of Supply & Tax Treatment Engine */}
+          {/* Column 2: Shipped To (Consignee / Destination - Dedicated Column for Bill To / Ship To Different) */}
+          <div className="space-y-3 bg-slate-50/70 p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                <Truck className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Shipped To (Consignee)</span>
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-md border border-indigo-200 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={isDifferentShipTo}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setIsDifferentShipTo(checked);
+                    if (checked && !shippingName) {
+                      setShippingName(customerName);
+                      setShippingAddress(customerAddress);
+                      setShippingStateCode(placeOfSupplyCode);
+                      setShippingGstin(customerGstin);
+                      setShippingPhone(customerPhone);
+                    }
+                  }}
+                  className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                />
+                <span>Different Ship-To?</span>
+              </label>
+            </div>
+
+            {!isDifferentShipTo ? (
+              <div className="bg-white rounded-lg border border-slate-200 p-3.5 text-xs space-y-2.5">
+                <div className="flex items-center gap-2 text-emerald-700 font-semibold text-[11px]">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                  <span>Same as Billing Address (Default)</span>
+                </div>
+                <div className="space-y-1 text-slate-600 border-t border-slate-100 pt-2 text-[11px]">
+                  <div className="font-semibold text-slate-800">{customerName || 'Customer / Buyer'}</div>
+                  <div className="line-clamp-2 text-slate-500">{customerAddress || 'Billing address will be used for delivery.'}</div>
+                  <div className="text-slate-500">Destination: {placeOfSupplyName} ({placeOfSupplyCode})</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDifferentShipTo(true);
+                    if (!shippingName) {
+                      setShippingName(customerName);
+                      setShippingAddress(customerAddress);
+                      setShippingStateCode(placeOfSupplyCode);
+                      setShippingGstin(customerGstin);
+                      setShippingPhone(customerPhone);
+                    }
+                  }}
+                  className="w-full mt-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 py-1.5 rounded-lg border border-indigo-200 transition-colors cursor-pointer text-center"
+                >
+                  Configure Separate Delivery Destination
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Consignee / Recipient Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={shippingName}
+                    onChange={(e) => setShippingName(e.target.value)}
+                    placeholder="e.g. Warehouse / Branch / Consignee"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 font-medium"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Consignee GSTIN (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={shippingGstin}
+                    onChange={(e) => setShippingGstin(e.target.value.toUpperCase())}
+                    placeholder="15-digit GSTIN (if separate branch/SEZ)"
+                    maxLength={15}
+                    className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                    Shipping / Delivery Address *
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={shippingAddress}
+                    onChange={(e) => setShippingAddress(e.target.value)}
+                    placeholder="Delivery site, warehouse street address, pincode"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 resize-none font-medium"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      Destination State
+                    </label>
+                    <select
+                      value={shippingStateCode}
+                      onChange={(e) => setShippingStateCode(e.target.value)}
+                      className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500 font-medium"
+                    >
+                      {INDIAN_STATES.map((st) => (
+                        <option key={st.code} value={st.code}>
+                          {st.code} - {st.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                      Consignee Phone
+                    </label>
+                    <input
+                      type="text"
+                      value={shippingPhone}
+                      onChange={(e) => setShippingPhone(e.target.value)}
+                      placeholder="+91 Contact person"
+                      className="w-full text-xs bg-white border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Column 3: Place of Supply & Tax Treatment Engine */}
           <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-              GST Tax Treatment Engine
+            <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+              <Sliders className="w-3.5 h-3.5 text-indigo-600" />
+              <span>GST Tax Engine</span>
             </h4>
 
             <div>
@@ -1033,13 +1446,13 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
               <div className="flex items-center justify-between">
                 <span className="text-slate-500">Supplier State:</span>
                 <span className="font-semibold text-slate-800">
-                  {business.state} (Code: {business.stateCode})
+                  {business.state} ({business.stateCode})
                 </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-500">Place of Supply:</span>
                 <span className="font-semibold text-slate-800">
-                  {placeOfSupplyName} (Code: {placeOfSupplyCode})
+                  {placeOfSupplyName} ({placeOfSupplyCode})
                 </span>
               </div>
               <div className="flex items-center justify-between pt-1 border-t border-slate-100">
@@ -1051,7 +1464,7 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
                       : 'bg-indigo-100 text-indigo-800'
                   }`}
                 >
-                  {isInterState ? 'Inter-State (IGST 100%)' : 'Intra-State (CGST 50% + SGST 50%)'}
+                  {isInterState ? 'Inter-State (IGST 100%)' : 'Intra-State (CGST + SGST)'}
                 </span>
               </div>
             </div>
@@ -1065,7 +1478,7 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
                 className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
               />
               <label htmlFor="rcmCheck" className="text-xs text-slate-700 font-medium cursor-pointer">
-                Subject to Reverse Charge (RCM u/s 9(3) / 9(4))
+                Subject to Reverse Charge (RCM)
               </label>
             </div>
           </div>
@@ -1096,7 +1509,7 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
-                  <th className="py-2.5 px-2 w-8 text-center">#</th>
+                  <th className="py-2.5 px-2 w-14 text-center">SL No.</th>
                   <th className="py-2.5 px-2 min-w-[200px]">Item Description / Catalogue</th>
                   <th className="py-2.5 px-2 w-24">HSN / SAC</th>
                   <th className="py-2.5 px-2 w-20">Qty</th>
@@ -1363,14 +1776,181 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
               </div>
             )}
 
-            {totals.roundOff !== 0 && (
-              <div className="flex justify-between text-xs text-slate-500">
-                <span>Round Off:</span>
-                <span className="font-mono">
-                  {totals.roundOff > 0 ? '+' : ''}₹ {totals.roundOff.toFixed(2)}
-                </span>
+            {/* Manager / Authority Amount Adjustment Override */}
+            <div className="pt-2 border-t border-slate-200">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={enableAuthorityAdjustment}
+                    onChange={(e) => setEnableAuthorityAdjustment(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded text-amber-600 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <span className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                    <Shield className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Authority Adjustment / Concession</span>
+                  </span>
+                </label>
+                {enableAuthorityAdjustment && (
+                  <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold uppercase">
+                    Override Active
+                  </span>
+                )}
               </div>
-            )}
+
+              {enableAuthorityAdjustment && (
+                <div className="mt-2.5 p-3 bg-amber-50/70 border border-amber-200 rounded-lg space-y-2 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-medium text-amber-900 mb-1">
+                        Adjustment Amount (₹) <span className="text-[10px] text-amber-700">(use - for discount, + for charge)</span>
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-mono font-bold text-slate-500">₹</span>
+                        <input
+                          type="number"
+                          step="any"
+                          value={manualAdjustment === 0 ? '' : manualAdjustment}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setManualAdjustment(val === '' ? 0 : parseFloat(val) || 0);
+                          }}
+                          placeholder="e.g. -250.00"
+                          className="w-full pl-7 pr-2 py-1.5 bg-white border border-amber-300 rounded text-xs font-mono font-bold text-slate-800 focus:ring-1 focus:ring-amber-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-medium text-amber-900 mb-1">
+                        Authorized By
+                      </label>
+                      <input
+                        type="text"
+                        value={adjustmentAuthorizedBy}
+                        onChange={(e) => setAdjustmentAuthorizedBy(e.target.value)}
+                        placeholder="Manager / Accounts Head"
+                        className="w-full p-1.5 bg-white border border-amber-300 rounded text-xs text-slate-800 focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-amber-900 mb-1">
+                      Adjustment Reason / Note *
+                    </label>
+                    <input
+                      type="text"
+                      value={adjustmentReason}
+                      onChange={(e) => setAdjustmentReason(e.target.value)}
+                      placeholder="e.g. MD special discount, Goodwill settlement concession, Price correction"
+                      className="w-full p-1.5 bg-white border border-amber-300 rounded text-xs text-slate-800 focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  {manualAdjustment !== 0 && (
+                    <div className="flex items-center justify-between text-[11px] pt-1 text-amber-900 font-semibold border-t border-amber-200/60">
+                      <span>Applied Adjustment:</span>
+                      <span className="font-mono">
+                        {manualAdjustment > 0 ? '+' : ''}₹ {manualAdjustment.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Authority Round-Off Override */}
+            <div className="pt-2 border-t border-slate-200">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-600 flex items-center gap-1">
+                  <span>Round Off:</span>
+                  {isManualRoundOff ? (
+                    <span className="text-[10px] bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.5 rounded">
+                      Manual
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-slate-400">Auto (Nearest ₹)</span>
+                  )}
+                </span>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!isManualRoundOff) {
+                        setIsManualRoundOff(true);
+                        setCustomRoundOff(totals.roundOff);
+                      } else {
+                        setIsManualRoundOff(false);
+                        setCustomRoundOff(0);
+                      }
+                    }}
+                    className={`text-[10px] px-2 py-0.5 rounded border font-semibold transition-colors cursor-pointer ${
+                      isManualRoundOff
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    {isManualRoundOff ? 'Custom Round-off Active' : 'Override Round-off'}
+                  </button>
+
+                  <span className="font-mono text-xs font-semibold">
+                    {totals.roundOff > 0 ? '+' : ''}₹ {totals.roundOff.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {isManualRoundOff && (
+                <div className="mt-2 p-2.5 bg-slate-100 border border-slate-200 rounded-lg text-xs space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-medium text-slate-600 shrink-0">Custom Round-off (₹):</span>
+                    <input
+                      type="number"
+                      step="any"
+                      value={customRoundOff === 0 ? '' : customRoundOff}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCustomRoundOff(val === '' ? 0 : parseFloat(val) || 0);
+                      }}
+                      placeholder="0.00"
+                      className="w-24 p-1 bg-white border border-slate-300 rounded text-right font-mono text-xs font-bold"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-1 flex-wrap">
+                    <span className="text-[10px] text-slate-500">Presets:</span>
+                    <button
+                      type="button"
+                      onClick={() => setCustomRoundOff(0)}
+                      className="px-2 py-0.5 bg-white hover:bg-slate-200 border border-slate-300 rounded text-[10px] font-semibold text-slate-700 cursor-pointer"
+                    >
+                      Exact Paise (₹0.00)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dec = totals.unadjustedGrand - Math.floor(totals.unadjustedGrand);
+                        setCustomRoundOff(Number((-dec).toFixed(2)));
+                      }}
+                      className="px-2 py-0.5 bg-white hover:bg-slate-200 border border-slate-300 rounded text-[10px] font-semibold text-slate-700 cursor-pointer"
+                    >
+                      Round Down
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dec = totals.unadjustedGrand - Math.floor(totals.unadjustedGrand);
+                        setCustomRoundOff(dec > 0 ? Number((1 - dec).toFixed(2)) : 0);
+                      }}
+                      className="px-2 py-0.5 bg-white hover:bg-slate-200 border border-slate-300 rounded text-[10px] font-semibold text-slate-700 cursor-pointer"
+                    >
+                      Round Up
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div className="flex justify-between text-sm font-bold text-slate-900 pt-2 border-t-2 border-slate-300">
               <span>Grand Total:</span>
@@ -1543,6 +2123,22 @@ export const InvoiceGenerator: React.FC<InvoiceGeneratorProps> = ({
           setIsAddCompanyModalOpen(false);
         }}
       />
+
+      {/* Excel Share & Download Modal */}
+      {isExcelModalOpen && (
+        <ExcelShareModal
+          invoice={currentInvoiceObj}
+          business={business}
+          onClose={() => setIsExcelModalOpen(false)}
+          onActionLogged={(action, details) => {
+            logAppAction(action, 'EXPORT', details, {
+              entityId: currentInvoiceObj.id,
+              entityNumber: currentInvoiceObj.invoiceNumber,
+              status: 'success',
+            });
+          }}
+        />
+      )}
 
       {/* UQC Unit Autocomplete Datalist */}
       <datalist id="invoice-gst-units">

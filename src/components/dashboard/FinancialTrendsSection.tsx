@@ -313,26 +313,19 @@ export const FinancialTrendsSection: React.FC = () => {
   const activeHoveredMonth = hoveredIndex !== null ? monthlyData[hoveredIndex] : null;
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs p-5 md:p-6 space-y-6">
+    <div className="card-v1 p-6 space-y-6">
       {/* 1. Header & Controls Bar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-[rgba(17,17,19,0.12)]">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-[11px] font-bold text-indigo-600 uppercase tracking-wider flex items-center gap-1.5">
-              <BarChart3 className="w-3.5 h-3.5" />
-              Financial Year Performance
-            </span>
-            <span className="text-slate-300">·</span>
-            <span className="text-xs font-semibold text-slate-700">FY {selectedFY}</span>
-            <span className="text-slate-300">·</span>
-            <span className="text-[11px] text-slate-500">April 1 to March 31</span>
-          </div>
-          <h3 className="text-lg md:text-xl font-bold text-slate-900 tracking-tight">
-            Monthly Profit & Revenue Trajectory
+          <div className="label mb-1">Financial Trajectory & Analytics</div>
+          <h3 className="font-bold text-xl text-[#111113] tracking-tight" style={{ letterSpacing: '-0.03em' }}>
+            Performance Trends & Margins
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Visualize recurring sales inflows, operating overhead, and net margin growth across 12 fiscal months.
-          </p>
+          <div className="flex items-center gap-2 text-xs text-[#111113]/60 mt-1">
+            <span className="font-semibold text-[#111113]">FY {selectedFY}</span>
+            <span>·</span>
+            <span>12 Fiscal Months (Apr 1 – Mar 31)</span>
+          </div>
         </div>
 
         {/* Action & Filter Controls */}
@@ -548,8 +541,8 @@ export const FinancialTrendsSection: React.FC = () => {
             )}
           </div>
 
-          {/* SVG Line Chart Canvas */}
-          <div className="relative w-full overflow-hidden bg-gradient-to-b from-slate-50/50 to-white rounded-xl border border-slate-200/90 p-2 sm:p-4">
+          {/* SVG Line Chart Canvas - Variation 1 */}
+          <div className="relative w-full overflow-hidden bg-white rounded border border-[rgba(17,17,19,0.12)] p-2 sm:p-4 shadow-2xs">
             <svg
               viewBox={`0 0 ${chartWidth} ${chartHeight}`}
               className="w-full h-64 sm:h-72 md:h-80 select-none overflow-visible"

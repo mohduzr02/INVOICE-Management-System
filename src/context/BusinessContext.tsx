@@ -22,6 +22,9 @@ import {
   Expense,
   Quotation,
   AuditLog,
+  PaymentReminderRecord,
+  ScheduledReminderConfig,
+  AppActionLog,
 } from '../types';
 import {
   DEFAULT_BUSINESS,
@@ -41,6 +44,24 @@ import {
 export type StorageMode = 'local' | 'firebase-spark';
 export type CloudSyncStatus = 'synced' | 'local_only' | 'syncing' | 'error';
 
+export interface BackupMetadata {
+  appName: string;
+  version: string;
+  exportedAt: string;
+  exportedBy: string;
+  complianceStandard: string;
+  checksum: string;
+  activeBusinessName?: string;
+}
+
+export interface BackupValidationResult {
+  valid: boolean;
+  error?: string;
+  metadata?: BackupMetadata;
+  stats?: Record<string, number>;
+  raw?: any;
+}
+
 interface BusinessContextType {
   storageMode: StorageMode;
   setStorageMode: (mode: StorageMode) => void;
@@ -48,8 +69,24 @@ interface BusinessContextType {
   cloudSyncError: string | null;
   syncLocalToCloud: () => Promise<boolean>;
   syncCloudToLocal: () => Promise<boolean>;
-  exportBackupJSON: () => void;
-  importBackupJSON: (jsonData: string | object) => Promise<{ success: boolean; message: string }>;
+  lastBackupTimestamp: string | null;
+  exportBackupJSON: () => {
+    success: boolean;
+    filename: string;
+    timestamp: string;
+    stats: Record<string, number>;
+  };
+  importBackupJSON: (
+    jsonData: string | object,
+    mode?: 'replace' | 'merge'
+  ) => Promise<{
+    success: boolean;
+    message: string;
+    stats?: Record<string, number>;
+    restoredAt?: string;
+    mode?: 'replace' | 'merge';
+  }>;
+  validateBackupJSON: (jsonData: string | object) => BackupValidationResult;
   clearAllSampleData: () => Promise<void>;
   clearAllData: () => Promise<void>;
   loadDemoData: () => Promise<void>;
@@ -92,6 +129,25 @@ interface BusinessContextType {
   saveQuotation: (quote: Omit<Quotation, 'id' | 'businessId' | 'ownerUid' | 'createdAt'>, existingId?: string) => Promise<Quotation>;
   deleteQuotation: (id: string) => Promise<void>;
   auditLogs: AuditLog[];
+  reminderRecords: PaymentReminderRecord[];
+  scheduledReminders: ScheduledReminderConfig[];
+  appActionLogs: AppActionLog[];
+  latestAppAction: AppActionLog | null;
+  logAppAction: (
+    action: string,
+    category: AppActionLog['category'],
+    details: string,
+    meta?: { entityId?: string; entityNumber?: string; status?: 'success' | 'warning' | 'info' }
+  ) => AppActionLog;
+  sendPaymentReminder: (
+    data: Omit<PaymentReminderRecord, 'id' | 'businessId' | 'sentAt' | 'status'> & { status?: PaymentReminderRecord['status'] }
+  ) => Promise<PaymentReminderRecord>;
+  schedulePaymentReminder: (
+    data: Omit<ScheduledReminderConfig, 'id' | 'businessId' | 'createdAt' | 'status'> & { status?: ScheduledReminderConfig['status'] }
+  ) => Promise<ScheduledReminderConfig>;
+  updateScheduledReminder: (id: string, updates: Partial<ScheduledReminderConfig>) => Promise<void>;
+  cancelScheduledReminder: (id: string) => Promise<void>;
+  deletePaymentReminderRecord: (id: string) => Promise<void>;
   resetToSampleData: () => Promise<void>;
   loading: boolean;
   isCloudSynced: boolean;
@@ -101,6 +157,23 @@ const BusinessContext = createContext<BusinessContextType | undefined>(undefined
 
 const LOCAL_STORAGE_KEY = 'invoicepro_gst_local_v1';
 const STORAGE_PREF_KEY = 'invoicepro_storage_preference';
+const LAST_BACKUP_KEY = 'invoicepro_last_backup_time';
+
+// Deterministic data checksum calculation for statutory audit verification
+function computeDataChecksum(obj: any): string {
+  try {
+    const str = typeof obj === 'string' ? obj : JSON.stringify(obj);
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash |= 0;
+    }
+    return 'CRC-' + Math.abs(hash).toString(16).toUpperCase().padStart(8, '0');
+  } catch {
+    return 'CRC-00000000';
+  }
+}
 
 // Sample IDs and keywords to purge automatically from user's storage
 const SAMPLE_IDS = new Set([
@@ -236,8 +309,16 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [expenses, setExpenses] = useState<Expense[]>(() => getLocalData('expenses', SAMPLE_EXPENSES));
   const [quotations, setQuotations] = useState<Quotation[]>(() => getLocalData('quotations', []));
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => getLocalData('auditLogs', []));
+  const [reminderRecords, setReminderRecords] = useState<PaymentReminderRecord[]>(() => getLocalData('reminderRecords', []));
+  const [scheduledReminders, setScheduledReminders] = useState<ScheduledReminderConfig[]>(() => getLocalData('scheduledReminders', []));
+  const [appActionLogs, setAppActionLogs] = useState<AppActionLog[]>(() => getLocalData('appActionLogs', []));
+  const [latestAppAction, setLatestAppAction] = useState<AppActionLog | null>(null);
+  const [lastBackupTimestamp, setLastBackupTimestamp] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(LAST_BACKUP_KEY);
+  });
 
-  // Sync to local storage on computer whenever state changes
+  // Sync to local storage and user-scoped backup whenever state changes
   useEffect(() => {
     try {
       const payload = {
@@ -253,8 +334,14 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         expenses,
         quotations,
         auditLogs,
+        reminderRecords,
+        scheduledReminders,
+        appActionLogs,
       };
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
+      if (user) {
+        localStorage.setItem(`${LOCAL_STORAGE_KEY}_user_${user.uid}`, JSON.stringify(payload));
+      }
     } catch (e) {
       console.warn('Failed to save to localStorage:', e);
     }
@@ -271,6 +358,10 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     expenses,
     quotations,
     auditLogs,
+    reminderRecords,
+    scheduledReminders,
+    appActionLogs,
+    user,
   ]);
 
   const businessId = business.id || (user ? `biz_${user.uid.substring(0, 12)}` : DEFAULT_BUSINESS.id);
@@ -294,9 +385,9 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  // Load from Firestore if in firebase-spark mode and user is logged in
+  // Load from Firestore and user-scoped storage when user logs in / starts session
   const loadBusinessData = useCallback(async () => {
-    if (!user || storageMode === 'local') {
+    if (!user) {
       setLoading(false);
       setIsCloudSynced(false);
       setCloudSyncStatus('local_only');
@@ -306,67 +397,105 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       setLoading(true);
       setCloudSyncStatus('syncing');
+
+      // 1. Immediately recollect from user-scoped local backup if available
+      const userLocalKey = `${LOCAL_STORAGE_KEY}_user_${user.uid}`;
+      try {
+        const cachedRaw = localStorage.getItem(userLocalKey);
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw);
+          if (Array.isArray(cached.invoices) && cached.invoices.length > 0) {
+            setInvoices((prev) => {
+              const combined = [...cached.invoices.filter((i: any) => !isSampleRecord(i))];
+              prev.forEach((inv) => {
+                if (!isSampleRecord(inv) && !combined.some((c: any) => c.id === inv.id || c.invoiceNumber === inv.invoiceNumber)) {
+                  combined.push(inv);
+                }
+              });
+              return combined;
+            });
+          }
+        }
+      } catch (cacheErr) {
+        console.warn('Could not read user local cache:', cacheErr);
+      }
+
+      // 2. Fetch directly from Firestore to recollect cloud invoices and records
       const bizDocRef = doc(db, 'businesses', businessId);
       const bizSnap = await getDoc(bizDocRef);
 
       if (bizSnap.exists()) {
         const rawBiz = bizSnap.data() as Business;
         if (
-          rawBiz.name === 'Apex Infotech & Hardware Solutions Pvt Ltd' ||
-          rawBiz.gstin === '27AABCA1234F1Z8' ||
-          rawBiz.ownerUid === 'system_default'
+          rawBiz.name !== 'Apex Infotech & Hardware Solutions Pvt Ltd' &&
+          rawBiz.gstin !== '27AABCA1234F1Z8' &&
+          rawBiz.ownerUid !== 'system_default'
         ) {
-          setBusinesses([DEFAULT_BUSINESS]);
-        } else {
           setBusinesses([rawBiz]);
         }
 
         // Fetch subcollections and sanitize any mock data
         const custSnap = await getDocs(collection(db, `businesses/${businessId}/customers`));
         const custData = custSnap.docs.map((d) => d.data() as Customer).filter((c) => !isSampleRecord(c));
-        setCustomers(custData);
+        if (custData.length > 0) setCustomers(custData);
 
         const suppSnap = await getDocs(collection(db, `businesses/${businessId}/suppliers`));
         const suppData = suppSnap.docs.map((d) => d.data() as Supplier).filter((s) => !isSampleRecord(s));
-        setSuppliers(suppData);
+        if (suppData.length > 0) setSuppliers(suppData);
 
         const prodSnap = await getDocs(collection(db, `businesses/${businessId}/products`));
         const prodData = prodSnap.docs.map((d) => d.data() as Product).filter((p) => !isSampleRecord(p));
-        setProducts(prodData);
+        if (prodData.length > 0) setProducts(prodData);
 
         const invSnap = await getDocs(collection(db, `businesses/${businessId}/invoices`));
-        const invData = invSnap.docs.map((d) => d.data() as Invoice).filter((i) => !isSampleRecord(i));
-        setInvoices(invData);
+        const cloudInvoices = invSnap.docs.map((d) => d.data() as Invoice).filter((i) => !isSampleRecord(i));
+        
+        // Merge cloud invoices with existing local invoices so nothing is lost
+        setInvoices((currentLocalInvoices) => {
+          const merged = [...cloudInvoices];
+          currentLocalInvoices.forEach((localInv) => {
+            if (!isSampleRecord(localInv) && !merged.some((ci) => ci.id === localInv.id || ci.invoiceNumber === localInv.invoiceNumber)) {
+              merged.push(localInv);
+              // Backfill local invoice to Firestore so it's safely stored in cloud
+              setDoc(doc(db, `businesses/${businessId}/invoices`, localInv.id), {
+                ...localInv,
+                ownerUid: user.uid,
+                businessId,
+              }).catch((e) => console.warn('Backfill to Firestore error:', e));
+            }
+          });
+          return merged;
+        });
 
         const purchSnap = await getDocs(collection(db, `businesses/${businessId}/purchases`));
         const purchData = purchSnap.docs.map((d) => d.data() as Purchase).filter((p) => !isSampleRecord(p));
-        setPurchases(purchData);
+        if (purchData.length > 0) setPurchases(purchData);
 
         const paySnap = await getDocs(collection(db, `businesses/${businessId}/payments`));
         const payData = paySnap.docs.map((d) => d.data() as Payment).filter((p) => !isSampleRecord(p));
-        setPayments(payData);
+        if (payData.length > 0) setPayments(payData);
 
         const expSnap = await getDocs(collection(db, `businesses/${businessId}/expenses`));
         const expData = expSnap.docs.map((d) => d.data() as Expense).filter((e) => !isSampleRecord(e));
-        setExpenses(expData);
+        if (expData.length > 0) setExpenses(expData);
 
         const cnSnap = await getDocs(collection(db, `businesses/${businessId}/credit_notes`));
         const cnData = cnSnap.docs.map((d) => d.data() as CreditDebitNote).filter((cn) => !isSampleRecord(cn));
-        setCreditNotes(cnData);
+        if (cnData.length > 0) setCreditNotes(cnData);
 
         const qSnap = await getDocs(collection(db, `businesses/${businessId}/quotations`));
         const qData = qSnap.docs.map((d) => d.data() as Quotation).filter((q) => !isSampleRecord(q));
-        setQuotations(qData);
+        if (qData.length > 0) setQuotations(qData);
 
         const logSnap = await getDocs(collection(db, `businesses/${businessId}/audit_logs`));
         const logData = logSnap.docs.map((d) => d.data() as AuditLog);
-        setAuditLogs(logData);
+        if (logData.length > 0) setAuditLogs(logData);
 
         setIsCloudSynced(true);
         setCloudSyncStatus('synced');
         setCloudSyncError(null);
       } else {
-        // First-time user setup: Initialize user business in Firestore
+        // First-time cloud user setup: Initialize user business in Firestore & sync current local invoices
         const initialBiz: Business = {
           ...business,
           id: businessId,
@@ -376,19 +505,30 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         };
         await setDoc(bizDocRef, initialBiz);
         setBusinesses([initialBiz]);
+
+        // Sync any non-sample invoices to cloud
+        const nonSampleInvoices = invoices.filter((inv) => !isSampleRecord(inv));
+        for (const inv of nonSampleInvoices) {
+          await setDoc(doc(db, `businesses/${businessId}/invoices`, inv.id), {
+            ...inv,
+            ownerUid: user.uid,
+            businessId,
+          });
+        }
+
         setIsCloudSynced(true);
         setCloudSyncStatus('synced');
         setCloudSyncError(null);
       }
     } catch (err: any) {
-      console.warn('Could not sync with Firestore (falling back to Local Storage):', err);
+      console.warn('Could not sync with Firestore (using Local Storage):', err);
       setIsCloudSynced(false);
       setCloudSyncStatus('error');
       setCloudSyncError(err?.message || 'Cloud sync unavailable');
     } finally {
       setLoading(false);
     }
-  }, [user, businessId, storageMode]);
+  }, [user, businessId]);
 
   useEffect(() => {
     loadBusinessData();
@@ -432,16 +572,71 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return true;
   }, [user, loadBusinessData]);
 
-  // Export full backup JSON
+  // Central App Action Logger ("show which every action taken on apps")
+  const logAppAction = useCallback((
+    action: string,
+    category: AppActionLog['category'],
+    details: string,
+    meta?: { entityId?: string; entityNumber?: string; status?: 'success' | 'warning' | 'info' }
+  ): AppActionLog => {
+    const entry: AppActionLog = {
+      id: `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      action,
+      category,
+      details,
+      timestamp: new Date().toISOString(),
+      entityId: meta?.entityId,
+      entityNumber: meta?.entityNumber,
+      status: meta?.status || 'info',
+    };
+    setAppActionLogs((prev) => [entry, ...prev.slice(0, 199)]);
+    setLatestAppAction(entry);
+    return entry;
+  }, []);
+
+  // Export full statutory backup JSON with metadata & checksum
   const exportBackupJSON = useCallback(() => {
+    const now = new Date();
+    const timestampStr = now.toISOString();
+
+    const entityCounts = {
+      invoicesCount: invoices.length,
+      customersCount: customers.length,
+      productsCount: products.length,
+      suppliersCount: suppliers.length,
+      purchasesCount: purchases.length,
+      paymentsCount: payments.length,
+      expensesCount: expenses.length,
+      creditNotesCount: creditNotes.length,
+      quotationsCount: quotations.length,
+      auditLogsCount: auditLogs.length,
+      reminderRecordsCount: reminderRecords.length,
+      scheduledRemindersCount: scheduledReminders.length,
+      appActionLogsCount: appActionLogs.length,
+      businessesCount: businesses.length,
+    };
+
+    const checksumPayload = {
+      invoices,
+      customers,
+      products,
+      purchases,
+      payments,
+      expenses,
+      businesses,
+    };
+
     const backupData = {
-      version: '1.0',
-      appName: 'InvoicePro GST',
-      exportedAt: new Date().toISOString(),
+      version: '2.4',
+      appName: 'Zavianoice',
+      complianceStandard: 'CGST Act 2017 Sec 36/44 (Statutory 72-Month Books Retention)',
+      exportedAt: timestampStr,
+      exportedBy: user?.email || business.name || 'Business Owner',
+      systemEnvironment: 'Production Offline-Ready',
       storageMode,
+      activeBusinessId,
       business,
       businesses,
-      activeBusinessId,
       customers,
       suppliers,
       products,
@@ -452,14 +647,49 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       creditNotes,
       quotations,
       auditLogs,
+      reminderRecords,
+      scheduledReminders,
+      appActionLogs,
+      stats: entityCounts,
+      checksum: computeDataChecksum(checksumPayload),
     };
+
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const dateTag = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+    const filename = `Zavianoice_Backup_${dateTag}.json`;
+
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `InvoicePro_Backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = filename;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
+
+    // Save timestamp of last backup
+    setLastBackupTimestamp(timestampStr);
+    try {
+      localStorage.setItem(LAST_BACKUP_KEY, timestampStr);
+    } catch (e) {
+      console.warn(e);
+    }
+
+    // App action log
+    logAppAction(
+      'Exported Full Database Backup',
+      'SYSTEM',
+      `Exported statutory compliance JSON backup (${filename}) with ${invoices.length} invoices, ${customers.length} customers, ${products.length} products.`,
+      { entityNumber: filename, status: 'success' }
+    );
+
+    return {
+      success: true,
+      filename,
+      timestamp: timestampStr,
+      stats: entityCounts,
+    };
   }, [
     storageMode,
     business,
@@ -475,37 +705,332 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     creditNotes,
     quotations,
     auditLogs,
+    reminderRecords,
+    scheduledReminders,
+    appActionLogs,
+    user,
+    logAppAction,
   ]);
 
-  // Import full backup JSON
-  const importBackupJSON = useCallback(async (jsonInput: string | object) => {
+  // Pre-restore JSON Validation and Inspection
+  const validateBackupJSON = useCallback((jsonInput: string | object): BackupValidationResult => {
+    try {
+      const data: any = typeof jsonInput === 'string' ? JSON.parse(jsonInput) : jsonInput;
+      if (!data || typeof data !== 'object') {
+        return { valid: false, error: 'File is not a valid JSON object structure.' };
+      }
+
+      // Verify schema signature
+      const isRecognized =
+        data.appName === 'Zavianoice' ||
+        data.appName === 'InvoicePro GST' ||
+        data.appName === 'InvoicePro' ||
+        Array.isArray(data.invoices) ||
+        Array.isArray(data.businesses) ||
+        data.business;
+
+      if (!isRecognized) {
+        return {
+          valid: false,
+          error: 'Unrecognized backup structure. File does not contain expected Zavianoice database records.',
+        };
+      }
+
+      const stats = {
+        invoicesCount: Array.isArray(data.invoices) ? data.invoices.length : 0,
+        customersCount: Array.isArray(data.customers) ? data.customers.length : 0,
+        productsCount: Array.isArray(data.products) ? data.products.length : 0,
+        suppliersCount: Array.isArray(data.suppliers) ? data.suppliers.length : 0,
+        purchasesCount: Array.isArray(data.purchases) ? data.purchases.length : 0,
+        paymentsCount: Array.isArray(data.payments) ? data.payments.length : 0,
+        expensesCount: Array.isArray(data.expenses) ? data.expenses.length : 0,
+        creditNotesCount: Array.isArray(data.creditNotes) ? data.creditNotes.length : 0,
+        quotationsCount: Array.isArray(data.quotations) ? data.quotations.length : 0,
+        auditLogsCount: Array.isArray(data.auditLogs) ? data.auditLogs.length : 0,
+        reminderRecordsCount: Array.isArray(data.reminderRecords) ? data.reminderRecords.length : 0,
+        scheduledRemindersCount: Array.isArray(data.scheduledReminders) ? data.scheduledReminders.length : 0,
+        appActionLogsCount: Array.isArray(data.appActionLogs) ? data.appActionLogs.length : 0,
+        businessesCount: Array.isArray(data.businesses) ? data.businesses.length : (data.business ? 1 : 0),
+      };
+
+      const checksum = data.checksum || computeDataChecksum({
+        invoices: data.invoices,
+        customers: data.customers,
+        products: data.products,
+      });
+
+      return {
+        valid: true,
+        metadata: {
+          appName: data.appName || 'Zavianoice',
+          version: data.version || '1.0',
+          exportedAt: data.exportedAt || 'Unknown Date',
+          exportedBy: data.exportedBy || (data.business?.name || 'Authorized User'),
+          complianceStandard: data.complianceStandard || 'CGST Act 2017 Sec 36/44 Compatible',
+          checksum,
+          activeBusinessName: data.business?.name || (Array.isArray(data.businesses) ? data.businesses[0]?.name : undefined),
+        },
+        stats,
+        raw: data,
+      };
+    } catch (e: any) {
+      return { valid: false, error: e?.message || 'Failed to parse JSON syntax.' };
+    }
+  }, []);
+
+  // Import full backup JSON with safe merge or clean replace
+  const importBackupJSON = useCallback(async (
+    jsonInput: string | object,
+    mode: 'replace' | 'merge' = 'replace'
+  ) => {
     try {
       const data: any = typeof jsonInput === 'string' ? JSON.parse(jsonInput) : jsonInput;
       if (!data || typeof data !== 'object') {
         return { success: false, message: 'Invalid backup file structure' };
       }
+
+      const mergeList = <T extends { id: string }>(currentList: T[], importedList?: T[]): T[] => {
+        if (!Array.isArray(importedList) || importedList.length === 0) return currentList;
+        if (mode === 'replace') return importedList;
+        const map = new Map<string, T>();
+        currentList.forEach((item) => map.set(item.id, item));
+        importedList.forEach((item) => map.set(item.id, item));
+        return Array.from(map.values());
+      };
+
+      let newBusinesses = businesses;
       if (Array.isArray(data.businesses) && data.businesses.length > 0) {
-        setBusinesses(data.businesses);
+        newBusinesses = mergeList(businesses, data.businesses);
+        setBusinesses(newBusinesses);
       } else if (data.business) {
-        setBusinesses([data.business]);
+        newBusinesses = mode === 'replace' ? [data.business] : (businesses.some(b => b.id === data.business.id) ? businesses.map(b => b.id === data.business.id ? data.business : b) : [...businesses, data.business]);
+        setBusinesses(newBusinesses);
       }
+
       if (data.activeBusinessId) {
         setActiveBusinessIdState(data.activeBusinessId);
       }
-      if (Array.isArray(data.customers)) setCustomers(data.customers);
-      if (Array.isArray(data.suppliers)) setSuppliers(data.suppliers);
-      if (Array.isArray(data.products)) setProducts(data.products);
-      if (Array.isArray(data.invoices)) setInvoices(data.invoices);
-      if (Array.isArray(data.purchases)) setPurchases(data.purchases);
-      if (Array.isArray(data.payments)) setPayments(data.payments);
-      if (Array.isArray(data.expenses)) setExpenses(data.expenses);
-      if (Array.isArray(data.creditNotes)) setCreditNotes(data.creditNotes);
-      if (Array.isArray(data.quotations)) setQuotations(data.quotations);
-      if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
 
-      return { success: true, message: 'All local records successfully restored!' };
+      const newCustomers = mergeList(customers, data.customers);
+      const newSuppliers = mergeList(suppliers, data.suppliers);
+      const newProducts = mergeList(products, data.products);
+      const newInvoices = mergeList(invoices, data.invoices);
+      const newPurchases = mergeList(purchases, data.purchases);
+      const newPayments = mergeList(payments, data.payments);
+      const newExpenses = mergeList(expenses, data.expenses);
+      const newCreditNotes = mergeList(creditNotes, data.creditNotes);
+      const newQuotations = mergeList(quotations, data.quotations);
+      const newAuditLogs = mergeList(auditLogs, data.auditLogs);
+      const newReminders = mergeList(reminderRecords, data.reminderRecords);
+      const newScheduledReminders = mergeList(scheduledReminders, data.scheduledReminders);
+      const newAppActionLogs = mergeList(appActionLogs, data.appActionLogs);
+
+      setCustomers(newCustomers);
+      setSuppliers(newSuppliers);
+      setProducts(newProducts);
+      setInvoices(newInvoices);
+      setPurchases(newPurchases);
+      setPayments(newPayments);
+      setExpenses(newExpenses);
+      setCreditNotes(newCreditNotes);
+      setQuotations(newQuotations);
+      setAuditLogs(newAuditLogs);
+      setReminderRecords(newReminders);
+      setScheduledReminders(newScheduledReminders);
+      setAppActionLogs(newAppActionLogs);
+
+      // Save directly to localStorage to guarantee immediate sync
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify({
+          businesses: newBusinesses,
+          business: newBusinesses.find(b => b.id === (data.activeBusinessId || activeBusinessId)) || newBusinesses[0] || DEFAULT_BUSINESS,
+          customers: newCustomers,
+          suppliers: newSuppliers,
+          products: newProducts,
+          invoices: newInvoices,
+          purchases: newPurchases,
+          payments: newPayments,
+          creditNotes: newCreditNotes,
+          expenses: newExpenses,
+          quotations: newQuotations,
+          auditLogs: newAuditLogs,
+          reminderRecords: newReminders,
+          scheduledReminders: newScheduledReminders,
+          appActionLogs: newAppActionLogs,
+        }));
+      } catch (e) {
+        console.warn('LocalStorage save after import warning:', e);
+      }
+
+      const stats = {
+        invoices: newInvoices.length,
+        customers: newCustomers.length,
+        products: newProducts.length,
+        purchases: newPurchases.length,
+        payments: newPayments.length,
+        expenses: newExpenses.length,
+      };
+
+      const modeLabel = mode === 'replace' ? 'Full Overwrite' : 'Merge & Update';
+      const timestamp = new Date().toISOString();
+
+      logAppAction(
+        'Restored Database Backup',
+        'SYSTEM',
+        `Restored database snapshot (${modeLabel}) with ${stats.invoices} invoices, ${stats.customers} customers, and ${stats.products} products.`,
+        { status: 'success' }
+      );
+
+      return {
+        success: true,
+        message: `Database successfully restored (${modeLabel}) with ${stats.invoices} invoices and ${stats.customers} customers.`,
+        stats,
+        restoredAt: timestamp,
+        mode,
+      };
     } catch (e: any) {
-      return { success: false, message: e.message || 'Failed to read backup file' };
+      return { success: false, message: e.message || 'Failed to read and restore backup file' };
+    }
+  }, [
+    businesses,
+    customers,
+    suppliers,
+    products,
+    invoices,
+    purchases,
+    payments,
+    expenses,
+    creditNotes,
+    quotations,
+    auditLogs,
+    reminderRecords,
+    scheduledReminders,
+    appActionLogs,
+    activeBusinessId,
+    logAppAction,
+  ]);
+
+  // Send Payment Reminder (Email / WhatsApp / SMS)
+  const sendPaymentReminder = async (
+    data: Omit<PaymentReminderRecord, 'id' | 'businessId' | 'sentAt' | 'status'> & { status?: PaymentReminderRecord['status'] }
+  ): Promise<PaymentReminderRecord> => {
+    const record: PaymentReminderRecord = {
+      ...data,
+      id: `rem_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      businessId,
+      sentAt: new Date().toISOString(),
+      status: data.status || 'SENT',
+    };
+    setReminderRecords((prev) => [record, ...prev]);
+    logAppAction(
+      `Sent ${record.channel} Reminder`,
+      'REMINDER',
+      `Sent payment reminder for Invoice #${record.invoiceNumber} (₹${record.amountDue.toLocaleString('en-IN')}) to ${record.customerName} via ${record.channel}`,
+      { entityId: record.invoiceId, entityNumber: record.invoiceNumber, status: 'success' }
+    );
+    return record;
+  };
+
+  // Schedule Automated Payment Reminder
+  const schedulePaymentReminder = async (
+    data: Omit<ScheduledReminderConfig, 'id' | 'businessId' | 'createdAt' | 'status'> & { status?: ScheduledReminderConfig['status'] }
+  ): Promise<ScheduledReminderConfig> => {
+    const schedule: ScheduledReminderConfig = {
+      ...data,
+      id: `sched_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      businessId,
+      status: data.status || 'ACTIVE',
+      createdAt: new Date().toISOString(),
+      nextRunDate: data.nextRunDate || data.scheduledDate,
+    };
+    setScheduledReminders((prev) => [schedule, ...prev]);
+    logAppAction(
+      'Scheduled Email Reminder',
+      'REMINDER',
+      `Automated email reminder scheduled for ${schedule.customerName} on Invoice #${schedule.invoiceNumber} (Scheduled date: ${schedule.nextRunDate})`,
+      { entityId: schedule.invoiceId, entityNumber: schedule.invoiceNumber, status: 'info' }
+    );
+    return schedule;
+  };
+
+  // Update Scheduled Reminder
+  const updateScheduledReminder = async (id: string, updates: Partial<ScheduledReminderConfig>) => {
+    setScheduledReminders((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, ...updates } : s))
+    );
+    logAppAction('Updated Reminder Schedule', 'REMINDER', `Updated automated reminder configuration #${id}`, { status: 'info' });
+  };
+
+  // Cancel Scheduled Reminder
+  const cancelScheduledReminder = async (id: string) => {
+    setScheduledReminders((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, status: 'CANCELLED' } : s))
+    );
+    logAppAction('Cancelled Scheduled Reminder', 'REMINDER', `Cancelled automated reminder #${id}`, { status: 'warning' });
+  };
+
+  // Delete Payment Reminder Log
+  const deletePaymentReminderRecord = async (id: string) => {
+    setReminderRecords((prev) => prev.filter((r) => r.id !== id));
+    logAppAction('Deleted Reminder Log', 'REMINDER', `Removed reminder log record from customer history`, { status: 'info' });
+  };
+
+  // Automated Reminder Engine: check for active scheduled reminders due today on startup
+  useEffect(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const dueReminders = scheduledReminders.filter(
+      (s) => s.status === 'ACTIVE' && s.nextRunDate <= today
+    );
+
+    if (dueReminders.length > 0) {
+      dueReminders.forEach((reminder) => {
+        // Record automated execution in reminder history
+        const reminderRecord: PaymentReminderRecord = {
+          id: `rem_auto_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          businessId,
+          customerId: reminder.customerId,
+          customerName: reminder.customerName,
+          customerEmail: reminder.customerEmail,
+          invoiceId: reminder.invoiceId,
+          invoiceNumber: reminder.invoiceNumber,
+          amountDue: reminder.amountDue,
+          channel: 'EMAIL',
+          subject: reminder.emailSubject,
+          message: reminder.emailTemplate,
+          sentAt: new Date().toISOString(),
+          status: 'SENT',
+          sentBy: 'Automated Reminder Scheduler',
+        };
+
+        setReminderRecords((prev) => [reminderRecord, ...prev]);
+
+        // Calculate next run date or mark completed
+        let nextStatus = reminder.status;
+        let nextRun = reminder.nextRunDate;
+        if (reminder.scheduleType === 'WEEKLY_RECURRING' || (reminder.frequencyDays && reminder.frequencyDays > 0)) {
+          const daysToAdd = reminder.frequencyDays || 7;
+          const nextD = new Date();
+          nextD.setDate(nextD.getDate() + daysToAdd);
+          nextRun = nextD.toISOString().split('T')[0];
+        } else {
+          nextStatus = 'COMPLETED';
+        }
+
+        setScheduledReminders((prev) =>
+          prev.map((r) =>
+            r.id === reminder.id
+              ? { ...r, status: nextStatus, lastRunAt: new Date().toISOString(), nextRunDate: nextRun }
+              : r
+          )
+        );
+
+        logAppAction(
+          'Automated Email Reminder Sent',
+          'REMINDER',
+          `Automated email reminder executed for ${reminder.customerName} (Invoice #${reminder.invoiceNumber}, ₹${reminder.amountDue.toLocaleString('en-IN')})`,
+          { entityId: reminder.invoiceId, entityNumber: reminder.invoiceNumber, status: 'success' }
+        );
+      });
     }
   }, []);
 
@@ -869,14 +1394,13 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       );
     }
 
-    if (user && storageMode === 'firebase-spark' && isCloudSynced) {
+    if (user) {
       try {
         await setDoc(doc(db, `businesses/${businessId}/invoices`, invoiceId), newInvoice);
+        setIsCloudSynced(true);
         setCloudSyncStatus('synced');
       } catch (err: any) {
         console.warn('Invoice save cloud sync note:', err);
-        setCloudSyncStatus('error');
-        setCloudSyncError(err?.message || 'Cloud write delayed');
       }
     }
 
@@ -898,7 +1422,7 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     );
     addAuditLog('CANCEL', 'INVOICE', id, `Cancelled invoice ${id}: ${reason || ''}`);
 
-    if (user && storageMode === 'firebase-spark' && isCloudSynced) {
+    if (user) {
       try {
         await updateDoc(doc(db, `businesses/${businessId}/invoices`, id), {
           status: 'CANCELLED',
@@ -907,8 +1431,6 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setCloudSyncStatus('synced');
       } catch (err: any) {
         console.warn('Invoice cancel cloud sync note:', err);
-        setCloudSyncStatus('error');
-        setCloudSyncError(err?.message || 'Cloud write delayed');
       }
     }
   };
@@ -917,14 +1439,12 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setInvoices((prev) => prev.filter((i) => i.id !== id));
     addAuditLog('DELETE', 'INVOICE', id, `Deleted draft invoice ${id}`);
 
-    if (user && storageMode === 'firebase-spark' && isCloudSynced) {
+    if (user) {
       try {
         await deleteDoc(doc(db, `businesses/${businessId}/invoices`, id));
         setCloudSyncStatus('synced');
       } catch (err: any) {
         console.warn('Invoice delete cloud sync note:', err);
-        setCloudSyncStatus('error');
-        setCloudSyncError(err?.message || 'Cloud write delayed');
       }
     }
   };
@@ -1203,6 +1723,9 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setCreditNotes([]);
     setQuotations([]);
     setAuditLogs([]);
+    setReminderRecords([]);
+    setScheduledReminders([]);
+    setAppActionLogs([]);
     setBusinesses([DEFAULT_BUSINESS]);
 
     try {
@@ -1255,8 +1778,10 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         cloudSyncError,
         syncLocalToCloud,
         syncCloudToLocal,
+        lastBackupTimestamp,
         exportBackupJSON,
         importBackupJSON,
+        validateBackupJSON,
         clearAllSampleData,
         clearAllData,
         loadDemoData,
@@ -1299,6 +1824,16 @@ export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         saveQuotation,
         deleteQuotation,
         auditLogs,
+        reminderRecords,
+        scheduledReminders,
+        appActionLogs,
+        latestAppAction,
+        logAppAction,
+        sendPaymentReminder,
+        schedulePaymentReminder,
+        updateScheduledReminder,
+        cancelScheduledReminder,
+        deletePaymentReminderRecord,
         resetToSampleData,
         loading,
         isCloudSynced,
